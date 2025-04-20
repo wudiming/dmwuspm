@@ -10,7 +10,7 @@ on:
 
 env:
   PROJECT_DIR: SPlayer  # 项目子目录
-  NODE_VERSION: 20.x    # 锁定Node版本
+  NODE_VERSION: 22.x    # 锁定Node版本
 
 jobs:
   build-and-release:
