@@ -1,169 +1,168 @@
-name: SPlayer 构建发布
+name: SPlayer 精准构建流程
 
 on:
   workflow_dispatch:
     inputs:
       release_name:
-        description: '发布名称（示例：v1.2.0）'
+        description: '发布名称（留空自动生成）'
         required: false
         type: string
 
 env:
-  PROJECT_DIR: SPlayer  # 项目子目录
-  NODE_VERSION: 22.x    # 锁定Node版本
+  PROJECT_DIR: SPlayer  # 大写目录
 
 jobs:
-  build-and-release:
+  precise-build:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
     steps:
-    # ========== 代码克隆 ==========
-    - name: 克隆仓库（master-fix分支）
+    # ========== 1. 克隆代码 ==========
+    - name: 克隆仓库 (master-fix分支)
       uses: actions/checkout@v4
       with:
         repository: IamFurina/SPlayer
         ref: master-fix
         path: ${{ env.PROJECT_DIR }}
-        fetch-depth: 0  # 完整克隆历史
 
-    # ========== 环境变量配置 ==========
-    - name: 配置Python环境
-      uses: actions/setup-python@v4
+    # ========== 2. 配置最新运行时 ==========
+    - name: 安装最新Node.js
+      uses: actions/setup-node@v3
       with:
-        python-version: "3.10"
+        node-version: 'latest'
+        cache: pnpm
+        cache-dependency-path: ${{ env.PROJECT_DIR }}/pnpm-lock.yaml
 
-    - name: 修改环境变量文件
+    - name: 安装最新pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: latest
+
+    # ========== 3. 精准修改环境变量 ==========
+    - name: 配置环境变量 (Python精确处理)
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
-        # 保留原文件属性复制
+        # 保留原文件元数据
         cp -p .env.example .env
 
         python <<"EOF"
         import re
         from pathlib import Path
         
-        # 配置替换映射（保留引号）
+        # 配置替换映射（严格保留格式）
         replacements = {
-            'RENDERER_VITE_SERVER_URL': '"https://musicapi.881128.xyz"',
-            'VITE_UNM_API': '"https://unm.881128.xyz/"',
-            'RENDERER_VITE_SITE_URL': '"https://music.881128.xyz"'
+            'RENDERER_VITE_SERVER_URL': {
+                'value': 'https://musicapi.881128.xyz',
+                'pattern': r'^(RENDERER_VITE_SERVER_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$',
+                'replacement': r'\1"\3"'
+            },
+            'VITE_UNM_API': {
+                'value': 'https://unm.881128.xyz/',
+                'pattern': r'^(VITE_UNM_API\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$',
+                'replacement': r'\1"\3/"'  # 确保结尾斜杠
+            },
+            'RENDERER_VITE_SITE_URL': {
+                'value': 'https://music.881128.xyz',
+                'pattern': r'^(RENDERER_VITE_SITE_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$',
+                'replacement': r'\1"\3"'
+            }
         }
         
         env_file = Path('.env')
         content = env_file.read_text()
         
-        # 构建动态正则模式（兼容各种格式）
-        patterns = {}
-        for key in replacements.keys():
-            # 匹配：键名 + 任意空格 + = + 任意空格 + 值 + 可选注释
-            patterns[key] = re.compile(
-                rf'^{key}\s*=\s*["\']?(.*?)["\']?(\s*#.*)?$',
-                re.MULTILINE
-            )
-        
-        # 执行替换并计数
+        # 执行精准替换
         modified = 0
-        for key, pattern in patterns.items():
-            new_content, count = pattern.subn(
-                f'{key} = {replacements[key]}', 
+        for key, config in replacements.items():
+            pattern = re.compile(config['pattern'], re.MULTILINE | re.IGNORECASE)
+            new_content, count = re.subn(
+                pattern,
+                lambda m: f"{m.group(1)}{config['value']}{m.group(5) or ''}",
                 content
             )
             if count > 0:
                 content = new_content
                 modified += 1
+            else:
+                # 添加缺失的配置项
+                content += f"\n{key} = {config['value']}"
+                modified += 1
         
-        # 验证必须修改3个配置项
+        # 严格验证修改结果
         if modified != 3:
-            raise ValueError(f"应修改3个配置项，实际修改了{modified}个")
+            raise ValueError(f"应修改3个配置项，实际处理了{modified}个")
         
-        env_file.write_text(content)
-        print("验证修改结果：\n" + content)
+        # 规范化换行符
+        content = '\n'.join(line.rstrip() for line in content.splitlines())
+        env_file.write_text(content + '\n')
+        
+        print("最终环境变量文件内容：")
+        print(content)
         EOF
 
-    # ========== Node.js 配置 ==========
-    - name: 设置Node.js环境
-      uses: actions/setup-node@v3
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: npm
-        cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
-
-    # ========== 依赖安装 ==========
-    - name: 处理项目依赖
+    # ========== 4. 安装依赖 ==========
+    - name: 安装项目依赖
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
-        # 检查必要文件存在
-        [ -f package.json ] || { echo "错误：找不到package.json"; exit 1; }
+        echo "环境信息："
+        echo "Node: $(node -v)"
+        echo "PNPM: $(pnpm -v)"
         
-        # 自动生成锁文件（如果需要）
-        if [ ! -f package-lock.json ]; then
-          echo "生成package-lock.json..."
-          npm install --package-lock-only --no-audit
-          
-          # 可选：提交生成的锁文件
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add package-lock.json
-          git commit -m "自动生成依赖锁文件" || echo "无新锁文件需要提交"
-        fi
+        # 清理旧依赖
+        rm -rf node_modules/ .pnpm-store/
+        
+        # 安装生产依赖
+        pnpm install --frozen-lockfile --prod
+        
+        # 验证依赖树
+        pnpm list --depth 0
 
-        # 安装依赖（带缓存优化）
-        echo "正在安装依赖..."
-        npm ci --no-audit --prefer-offline --loglevel=error
-        echo "依赖安装完成！"
-
-    # ========== 项目构建 ==========
-    - name: 执行项目构建
+    # ========== 5. 构建项目 ==========
+    - name: 执行构建
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
-        # 显示环境信息
-        echo "Node版本: $(node -v)"
-        echo "NPM版本: $(npm -v)"
+        # 带清理的构建
+        pnpm run clean && pnpm run build
         
-        # 带错误检查的构建
-        set -e
-        npm run build -- --prod
-        
-        # 验证构建输出
-        [ -d out/renderer ] || { echo "构建失败：缺失out/renderer目录"; exit 1; }
-        [ -f out/renderer/index.html ] || { echo "构建失败：缺失入口文件"; exit 1; }
+        # 严格验证产物
+        [ -d out/renderer ] || (echo "构建失败：缺少输出目录"; exit 1)
+        [ -f out/renderer/index.html ] || (echo "错误：缺失入口文件"; exit 1)
 
-    # ========== 发布准备 ==========
-    - name: 打包构建产物
+    # ========== 6. 发布准备 ==========
+    - name: 创建发布包
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
-        # 创建发布目录
-        mkdir -p release
-        
-        # 处理发布名称
+        # 生成智能文件名
         if [ -z "${{ inputs.release_name }}" ]; then
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          RELEASE_NAME="build-${TIMESTAMP}"
+          RELEASE_NAME="Build-$(date +%Y%m%d-%H%M%S)"
         else
           RELEASE_NAME="${{ inputs.release_name }}"
         fi
+
+        # 创建版本化目录结构
+        mkdir -p release/${RELEASE_NAME}
+        cp -r out/renderer/* release/${RELEASE_NAME}
         
-        # 打包文件（保留目录结构）
-        tar -czvf "release/${RELEASE_NAME}.tar.gz" \
-          --transform "s/^out\/renderer/${RELEASE_NAME}/" \
-          out/renderer
+        # 生成压缩包（保留目录结构）
+        tar -czvf release/${RELEASE_NAME}.tar.gz -C release ${RELEASE_NAME}
         
-        # 显示打包结果
-        echo "生成文件："
+        echo "打包结果："
         ls -lh release/
 
-    # ========== 发布到GitHub ==========
-    - name: 创建版本发布
+    # ========== 7. 发布版本 ==========
+    - name: 创建GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         name: ${{ inputs.release_name || '自动构建' }}
         tag_name: build-${{ github.run_number }}
         body: |
-          构建信息：
-          - 触发时间：${{ github.run_started_at }}
-          - 提交版本：[${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-          - 工作流程：[${{ github.workflow }} #${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          ## 构建详情
+          - 时间：${{ github.run_started_at }}
+          - 环境：
+            - Node: $(node -v)
+            - PNPM: $(pnpm -v)
+          - 提交：[${{
+            github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
         files: |
           ${{ env.PROJECT_DIR }}/release/*.tar.gz
       env:
