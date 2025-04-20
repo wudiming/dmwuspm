@@ -9,7 +9,7 @@ on:
         type: string
 
 env:
-  PROJECT_DIR: splayer  # 项目子目录
+  PROJECT_DIR: SPlayer  # 项目子目录
   NODE_VERSION: 20.x    # 锁定Node版本
 
 jobs:
