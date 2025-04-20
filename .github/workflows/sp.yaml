@@ -110,7 +110,7 @@ jobs:
         rm -rf node_modules/ .pnpm-store/
         
         # 安装生产依赖
-        pnpm install --frozen-lockfile --prod
+        pnpm install
         
         # 验证依赖树
         pnpm list --depth 0
