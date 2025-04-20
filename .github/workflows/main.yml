@@ -1,73 +1,94 @@
+# GitHub Actions 工作流：用于手动触发构建并发布 SPlayer 渲染器
 name: Build and Release SPlayer Renderer
 
+# 触发器配置：使用 workflow_dispatch 支持手动触发
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag (optional, defaults to run number)'
-        required: false
+        description: 'Release tag（可选，不填则使用 run number 作为默认标签）'
+        required: false  # 是否为必填项
 
 jobs:
+  # 定义一个名为 build 的任务
   build:
+    # 在 Ubuntu 最新版本的虚拟环境中运行
     runs-on: ubuntu-latest
+    # 全局环境变量：将 release_tag 或 run_number 存为 RELEASE_TAG
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.release_tag || format('v{0}', github.run_number) }}
+
     steps:
+      # 步骤 1：检出当前工作流所在的仓库（为了获取工作流文件本身）
       - name: Checkout this workflow repo
         uses: actions/checkout@v3
 
+      # 步骤 2：克隆目标仓库的指定分支（master-fix）到本地子目录 splayer
       - name: Clone SPlayer repository
         run: |
+          # --branch 用于指定分支，克隆到目录名为 splayer
           git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
 
+      # 步骤 3：设置 Node.js 运行环境，使用最新 LTS 版本
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
-          cache: 'pnpm'
+          # 指定 Node.js 版本为最新 LTS
+          node-version: '20.x'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 7
-
+      # 步骤 4：在克隆下来的项目目录中准备 .env 文件
       - name: Prepare .env file
-        working-directory: splayer
+        working-directory: splayer  # 切换到 splayer 目录下执行命令
         run: |
+          # 复制环境变量示例文件
           cp .env.example .env
+          # 使用 sed 命令替换 .env 文件中的三个关键参数
           sed -i 's|RENDERER_VITE_SERVER_URL=.*|RENDERER_VITE_SERVER_URL=https://musicapi.881128.xyz|' .env
           sed -i 's|VITE_UNM_API=.*|VITE_UNM_API=https://unm.881128.xyz/|' .env
           sed -i 's|RENDERER_VITE_SITE_URL=.*|RENDERER_VITE_SITE_URL=https://music.881128.xyz|' .env
 
-      - name: Install dependencies
-        working-directory: splayer
-        run: pnpm install
+      # 步骤 5：安装项目依赖
+      - name: Install dependencies with npm
+        working-directory: splayer  # 确保在项目根目录执行 npm install
+        run: npm install  # 使用 npm 安装 package.json 中指定的所有依赖
 
-      - name: Build project
-        working-directory: splayer
-        run: pnpm build
+      # 步骤 6：执行项目构建命令，生成编译产物
+      - name: Build project with npm
+        working-directory: splayer  # 在项目目录下运行 build
+        run: npm run build  # 通常对应 package.json 中的 "build" 脚本
 
+      # 步骤 7：打包渲染器输出目录，压缩包根据 RELEASE_TAG 动态命名
       - name: Package renderer output
         run: |
           mkdir -p artifacts
           cd splayer/out
-          zip -r ../../artifacts/renderer.zip renderer
+          # 使用环境变量 RELEASE_TAG 为压缩包动态命名
+          zip -r ../../artifacts/${RELEASE_TAG}.zip renderer
 
+      # 步骤 8：创建 GitHub Release
       - name: Create GitHub Release
-        id: create_release
+        id: create_release  # 定义步骤 ID，供后续上传资产时引用
         uses: actions/create-release@v1
         env:
+          # 使用内置的 GITHUB_TOKEN 进行认证，自动生成 Release
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.event.inputs.release_tag || format('v{0}', github.run_number) }}
-          release_name: ${{ github.event.inputs.release_tag || format('Release {0}', github.run_number) }}
-          draft: false
-          prerelease: false
+          # 使用 RELEASE_TAG 作为 tag 名称和 Release 名称
+          tag_name: ${{ env.RELEASE_TAG }}
+          release_name: ${{ env.RELEASE_TAG }}
+          draft: false       # 是否为草稿 Release
+          prerelease: false  # 是否标记为预发行
 
+      # 步骤 9：上传打包好的资产到刚创建的 Release
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # 使用上一步骤 create_release 的输出 upload_url
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/renderer.zip
-          asset_name: renderer.zip
-          asset_content_type: application/zip
+          # 本地资产路径，动态使用 RELEASE_TAG
+          asset_path: ./artifacts/${{ env.RELEASE_TAG }}.zip
+          # 在 Release 页面显示的文件名，也根据 RELEASE_TAG 动态命名
+          asset_name: ${{ env.RELEASE_TAG }}.zip
+          asset_content_type: application/zip       # 文件类型
