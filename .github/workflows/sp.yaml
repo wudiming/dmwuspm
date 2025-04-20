@@ -1,4 +1,4 @@
-name: SPlayer PNPM 构建流程
+name: SPlayer 精准构建流程
 
 on:
   workflow_dispatch:
@@ -9,52 +9,111 @@ on:
         type: string
 
 env:
-  PROJECT_DIR: SPlayer
+  PROJECT_DIR: SPlayer  # 大写目录
 
 jobs:
-  build:
+  precise-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
-    # ========== 1. 克隆仓库 ==========
-    - name: 克隆代码库
+    # ========== 1. 克隆代码 ==========
+    - name: 克隆仓库 (master-fix分支)
       uses: actions/checkout@v4
       with:
         repository: IamFurina/SPlayer
         ref: master-fix
         path: ${{ env.PROJECT_DIR }}
 
-    # ========== 2. 配置Node环境 ==========
+    # ========== 2. 配置最新运行时 ==========
     - name: 安装最新Node.js
       uses: actions/setup-node@v3
       with:
         node-version: 'latest'
 
-    # ========== 3. 安装PNPM ==========
-    - name: 安装并配置pnpm
+    - name: 安装最新pnpm
       uses: pnpm/action-setup@v2
       with:
         version: latest
-        run_install: false  # 禁用自动安装依赖
 
-    # ========== 4. 验证环境 ==========
-    - name: 显示环境信息
+    # ========== 3. 精准修改环境变量 ==========
+    - name: 配置环境变量 (Python精确处理)
+      working-directory: ${{ env.PROJECT_DIR }}
       run: |
-        echo "PATH: $PATH"
-        echo "PNPM路径: $(which pnpm)"
-        echo "PNPM版本: $(pnpm -v)"
-      shell: bash
+        # 保留原文件元数据
+        cp -p .env.example .env
 
-    # ========== 5. 安装依赖 ==========
+        python <<"EOF"
+        import re
+        from pathlib import Path
+        
+        # 配置替换映射（严格保留格式）
+        replacements = {
+            'RENDERER_VITE_SERVER_URL': {
+                'value': 'https://musicapi.881128.xyz',
+                'pattern': r'^(RENDERER_VITE_SERVER_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$',
+                'replacement': r'\1"\3"'
+            },
+            'VITE_UNM_API': {
+                'value': 'https://unm.881128.xyz/',
+                'pattern': r'^(VITE_UNM_API\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$',
+                'replacement': r'\1"\3/"'  # 确保结尾斜杠
+            },
+            'RENDERER_VITE_SITE_URL': {
+                'value': 'https://music.881128.xyz',
+                'pattern': r'^(RENDERER_VITE_SITE_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$',
+                'replacement': r'\1"\3"'
+            }
+        }
+        
+        env_file = Path('.env')
+        content = env_file.read_text()
+        
+        # 执行精准替换
+        modified = 0
+        for key, config in replacements.items():
+            pattern = re.compile(config['pattern'], re.MULTILINE | re.IGNORECASE)
+            new_content, count = re.subn(
+                pattern,
+                lambda m: f"{m.group(1)}{config['value']}{m.group(5) or ''}",
+                content
+            )
+            if count > 0:
+                content = new_content
+                modified += 1
+            else:
+                # 添加缺失的配置项
+                content += f"\n{key} = {config['value']}"
+                modified += 1
+        
+        # 严格验证修改结果
+        if modified != 3:
+            raise ValueError(f"应修改3个配置项，实际处理了{modified}个")
+        
+        # 规范化换行符
+        content = '\n'.join(line.rstrip() for line in content.splitlines())
+        env_file.write_text(content + '\n')
+        
+        print("最终环境变量文件内容：")
+        print(content)
+        EOF
+
+    # ========== 4. 安装依赖 ==========
     - name: 安装项目依赖
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
+        echo "环境信息："
+        echo "Node: $(node -v)"
+        echo "PNPM: $(pnpm -v)"
+        
         # 清理旧依赖
-        rm -rf node_modules
-
-        # 安装依赖
-        pnpm install --frozen-lockfile
-
+        rm -rf node_modules/ .pnpm-store/
+        
+        # 安装生产依赖
+        pnpm install --frozen-lockfile --prod
+        
+        # 验证依赖树
+        pnpm list --depth 0
 
     # ========== 5. 构建项目 ==========
     - name: 执行构建
