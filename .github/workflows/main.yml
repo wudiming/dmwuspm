@@ -1,105 +1,141 @@
-name: SPlayer 构建发布流程
+name: 构建并发布 SPlayer
 
+# 1. 手动触发（workflow_dispatch），并让用户在触发时输入 Release 名称
 on:
   workflow_dispatch:
     inputs:
       release_name:
-        description: '发布包名称（将作为ZIP文件名）'
+        description: '请输入本次 Release 的名称，用于打包文件名和 GitHub Release 标签'
         required: true
-        type: string
 
 jobs:
-  build-publish:
+  build-and-release:
+    name: 编译 & 发布流程
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-    # ====================== 初始化配置 ======================
-    - name: 生成构建标签
-      id: tag_gen
-      run: echo "tag=$(date +'v%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+      # ----------------------------------------------------
+      # 步骤 1：检出当前仓库（权限配置）
+      # ----------------------------------------------------
+      - name: 检出当前仓库
+        uses: actions/checkout@v3
+        with:
+          # 如果你需要拉取 submodule，可以在此开启
+          submodules: 'recursive'
+      
+      # ----------------------------------------------------
+      # 步骤 2：克隆 SPlayer 仓库的 master-fix 分支
+      # ----------------------------------------------------
+      - name: 克隆 SPlayer(master-fix 分支)
+        run: |
+          echo "开始克隆 IamFurina/SPlayer 仓库的 master-fix 分支..."
+          git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
+          echo "克隆完成，目录：splayer"
 
-    # ====================== 代码获取阶段 ======================
-    - name: 克隆代码仓库
-      uses: actions/checkout@v4
-      with:
-        repository: 'IamFurina/SPlayer'
-        ref: 'master-fix'
-        # 深度克隆确保获取所有历史记录
-        fetch-depth: 0
+      # ----------------------------------------------------
+      # 步骤 3：复制 .env.example 到 .env
+      # ----------------------------------------------------
+      - name: 准备环境配置文件 (.env)
+        run: |
+          echo "复制 .env.example 为 .env 文件..."
+          cp splayer/.env.example splayer/.env
+          echo "复制完成：splayer/.env"
 
-    # ====================== 环境配置阶段 ======================
-    - name: 创建环境文件
-      run: |
-        # 检查原始文件是否存在
-        if [ ! -f .env.example ]; then
-          echo "错误：找不到.env.example文件"
-          exit 1
-        fi
-        cp -v .env.example .env
+      # ----------------------------------------------------
+      # 步骤 4：使用 Python 修改 .env 中的变量值
+      # ----------------------------------------------------
+      - name: 使用 Python 更新 .env 配置
+        run: |
+          echo "开始通过 Python 脚本批量替换 .env 中的配置项..."
+          python3 - << 'EOF'
+import io, sys
 
-    - name: 配置环境变量
-      run: |
-        # 使用@作为分隔符避免路径转义问题
-        sed -i 's@^RENDERER_VITE_SERVER_URL=.*@RENDERER_VITE_SERVER_URL=https://musicapi.881128.xyz@' .env
-        sed -i 's@^VITE_UNM_API=.*@VITE_UNM_API=https://unm.881128.xyz/@' .env
-        sed -i 's@^RENDERER_VITE_SITE_URL=.*@RENDERER_VITE_SITE_URL=https://music.881128.xyz@' .env
-        
-        echo "当前环境文件内容："
-        cat .env
+env_file = 'splayer/.env'
+# 读取原始文件内容
+with io.open(env_file, 'r', encoding='utf-8') as f:
+    lines = f.readlines()
 
-    # ====================== 构建环境配置 ======================
-    - name: 配置Node.js环境
-      uses: actions/setup-node@v4
-      with:
-        # 自动获取最新LTS版本
-        node-version: 'lts/*'
-        # 自动安装最新pnpm版本
-        pnpm-version: 'latest'
-        # 缓存策略配置
-        cache: 'pnpm'
+# 新的配置值映射表
+mapping = {
+    'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
+    'VITE_UNM_API': 'https://unm.881128.xyz/',
+    'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
+}
 
-    - name: 验证环境工具
-      run: |
-        echo "---- 版本信息 ----"
-        node --version
-        pnpm --version
-        echo "-----------------"
-        # 确认pnpm可执行路径
-        which pnpm
+new_lines = []
+for line in lines:
+    # 如果行以某个变量名开头，则替换该行
+    for key, val in mapping.items():
+        if line.startswith(f"{key}="):
+            line = f"{key}={val}\n"
+            break
+    new_lines.append(line)
 
-    # ====================== 依赖安装阶段 ======================
-    - name: 安装项目依赖
-      run: |
-        # 使用严格模式防止安装错误
-        set -e
-        pnpm install --strict-peer-dependencies --reporter=ndjson
-        echo "依赖安装完成，磁盘使用情况："
-        df -h
+# 将替换后的内容写回文件
+with io.open(env_file, 'w', encoding='utf-8') as f:
+    f.writelines(new_lines)
 
-    # ====================== 构建阶段 ======================
-    - name: 执行项目构建
-      run: |
-        pnpm run build --if-present
-        echo "构建产物目录结构："
-        ls -lR out
+# 输出修改后的完整文件内容，以便调试查看
+print("===== .env 文件修改后内容 =====")
+with io.open(env_file, 'r', encoding='utf-8') as f:
+    sys.stdout.write(f.read())
+print("===== 结束 =====")
+EOF
 
-    # ====================== 发布准备阶段 ======================
-    - name: 打包构建结果
-      run: |
-        # 创建带时间戳的压缩包
-        timestamp=$(date +%Y%m%d-%H%M)
-        zip_name="${{ github.event.inputs.release_name }}_${timestamp}.zip"
-        zip -rq "${zip_name}" out/renderer
-        echo "生成压缩包: ${zip_name}"
+      # ----------------------------------------------------
+      # 步骤 5：设置 Node.js 环境（使用最新 LTS 版本）
+      # ----------------------------------------------------
+      - name: 设置 Node.js (最新 LTS)
+        uses: actions/setup-node@v3
+        with:
+          # 指定使用最新的 LTS 版本
+          node-version: lts/*
+          # 自动缓存 npm 依赖，加速后续构建
+          cache: 'npm'
+          cache-dependency-path: splayer/package-lock.json
 
-    # ====================== 发布阶段 ======================
-    - name: 创建GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ steps.tag_gen.outputs.tag }}
-        name: ${{ github.event.inputs.release_name }}
-        files: |
-          *.zip
-        draft: false
+      # ----------------------------------------------------
+      # 步骤 6：安装项目依赖，显示详细安装进度
+      # ----------------------------------------------------
+      - name: 安装 npm 依赖
+        working-directory: splayer
+        run: |
+          echo "🔧 开始安装 npm 依赖..."
+          npm install --verbose
+          echo "✅ 依赖安装完成"
+
+      # ----------------------------------------------------
+      # 步骤 7：执行项目构建，显示详细构建日志
+      # ----------------------------------------------------
+      - name: 构建项目 (npm run build)
+        working-directory: splayer
+        run: |
+          echo "🏗️  开始项目构建..."
+          npm run build --verbose
+          echo "✅ 构建完成"
+
+      # ----------------------------------------------------
+      # 步骤 8：打包 out/renderer 文件夹
+      # ----------------------------------------------------
+      - name: 打包 renderer 输出目录
+        run: |
+          echo "📦 打包 splayer/out/renderer 目录..."
+          cd splayer/out
+          zip -r "../${{ github.event.inputs.release_name }}.zip" renderer
+          echo "✅ 打包完成：splayer/out/${{ github.event.inputs.release_name }}.zip"
+
+      # ----------------------------------------------------
+      # 步骤 9：创建 GitHub Release 并上传打包文件
+      # ----------------------------------------------------
+      - name: 发布 Release 并上传资产
+        uses: softprops/action-gh-release@v1
+        with:
+          # 标签名使用用户输入的 release_name
+          tag_name: ${{ github.event.inputs.release_name }}
+          # Release 名称同标签名
+          name: ${{ github.event.inputs.release_name }}
+          # 上传刚才生成的 zip 包
+          files: splayer/out/${{ github.event.inputs.release_name }}.zip
+        env:
+          # 使用内置的 GITHUB_TOKEN 自动认证
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
