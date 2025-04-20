@@ -1,6 +1,6 @@
 name: 构建并发布 SPlayer
 
-# 手动触发，并在触发时输入 Release 名称
+# 1. 手动触发，并要求输入 Release 名称
 on:
   workflow_dispatch:
     inputs:
@@ -15,16 +15,16 @@ jobs:
 
     steps:
       # ----------------------------------------------------
-      # 步骤 1：克隆 SPlayer 仓库的 master-fix 分支
+      # 步骤 1：克隆 SPlayer(master-fix 分支)
       # ----------------------------------------------------
       - name: 克隆 SPlayer(master-fix 分支)
         run: |
           echo "开始克隆 IamFurina/SPlayer 仓库的 master-fix 分支..."
           git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
-          echo "克隆完成，目录：splayer"
+          echo "克隆完成：目录 splayer"
 
       # ----------------------------------------------------
-      # 步骤 2：复制 .env.example 到 .env
+      # 步骤 2：复制 .env.example 为 .env
       # ----------------------------------------------------
       - name: 准备环境配置文件 (.env)
         run: |
@@ -33,45 +33,39 @@ jobs:
           echo "复制完成：splayer/.env"
 
       # ----------------------------------------------------
-      # 步骤 3：写入并执行 Python 脚本来更新 .env
+      # 步骤 3：写入并执行修正版 Python 脚本来更新 .env
       # ----------------------------------------------------
       - name: 写入 Env 更新脚本
         run: |
           cat << 'EOF' > splayer/update_env.py
-          #!/usr/bin/env python3
-          import io, sys
+#!/usr/bin/env python3
+import re
 
-          env_file = 'splayer/.env'
-          # 读取原始文件
-          with io.open(env_file, 'r', encoding='utf-8') as f:
-              lines = f.readlines()
+env_file = 'splayer/.env'
+with open(env_file, 'r', encoding='utf-8') as f:
+    content = f.read()
 
-          # 定义要替换的键值
-          mapping = {
-              'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
-              'VITE_UNM_API': 'https://unm.881128.xyz/',
-              'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
-          }
+# 要替换的键值映射（保持等号两侧空格和双引号格式）
+mapping = {
+    'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
+    'VITE_UNM_API': 'https://unm.881128.xyz/',
+    'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
+}
 
-          new_lines = []
-          for line in lines:
-              # 如果是目标行，就替换
-              for key, val in mapping.items():
-                  if line.startswith(f"{key}="):
-                      line = f"{key}={val}\n"
-                      break
-              new_lines.append(line)
+for key, val in mapping.items():
+    # 匹配带空格和双引号的行
+    pattern = rf'^{key}\s*=\s*".*"'
+    replacement = f'{key} = "{val}"'
+    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
 
-          # 写回文件
-          with io.open(env_file, 'w', encoding='utf-8') as f:
-              f.writelines(new_lines)
+with open(env_file, 'w', encoding='utf-8') as f:
+    f.write(content)
 
-          # 打印结果以供验证
-          print("===== .env 文件修改后内容 =====")
-          with io.open(env_file, 'r', encoding='utf-8') as f:
-              sys.stdout.write(f.read())
-          print("===== 结束 =====")
-          EOF
+# 输出最终 .env 内容，供日志查看
+print("===== .env 文件修改后内容 =====")
+print(content)
+print("===== 结束 =====")
+EOF
 
       - name: 执行 Env 更新脚本
         run: |
@@ -79,17 +73,17 @@ jobs:
           python3 splayer/update_env.py
 
       # ----------------------------------------------------
-      # 步骤 4：设置 Node.js 环境（使用最新 LTS 版本）
+      # 步骤 4：设置 Node.js 环境（最新 LTS），并缓存依赖
       # ----------------------------------------------------
       - name: 设置 Node.js (最新 LTS)
         uses: actions/setup-node@v3
         with:
           node-version: lts/*
           cache: 'npm'
-          cache-dependency-path: splayer/package-lock.json
+          cache-dependency-path: splayer/package.json
 
       # ----------------------------------------------------
-      # 步骤 5：安装 npm 依赖，显示详细安装进度
+      # 步骤 5：安装 npm 依赖，显示详细日志
       # ----------------------------------------------------
       - name: 安装 npm 依赖
         working-directory: splayer
@@ -99,7 +93,7 @@ jobs:
           echo "✅ 依赖安装完成"
 
       # ----------------------------------------------------
-      # 步骤 6：执行项目构建，显示详细构建日志
+      # 步骤 6：构建项目，显示详细日志
       # ----------------------------------------------------
       - name: 构建项目 (npm run build)
         working-directory: splayer
@@ -117,7 +111,7 @@ jobs:
           cd splayer/out
           zip -r "../${{ github.event.inputs.release_name }}.zip" renderer
           tar -czf "../${{ github.event.inputs.release_name }}.tar.gz" renderer
-          echo "✅ 打包完成：生成 .zip 和 .tar.gz 文件"
+          echo "✅ 打包完成：生成 .zip 和 .tar.gz"
 
       # ----------------------------------------------------
       # 步骤 8：创建 GitHub Release 并上传两个压缩包
