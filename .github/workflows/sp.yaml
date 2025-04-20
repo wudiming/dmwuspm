@@ -61,7 +61,7 @@ jobs:
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
         # 带清理的构建
-        pnpm run clean && pnpm run build
+        pnpm build
         
         # 严格验证产物
         [ -d out/renderer ] || (echo "构建失败：缺少输出目录"; exit 1)
