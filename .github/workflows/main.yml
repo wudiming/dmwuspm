@@ -1,97 +1,100 @@
-# GitHub Actions 工作流：用于手动触发构建并发布 SPlayer 渲染器
-name: Build and Release SPlayer Renderer
+name: 构建并发布 SPlayer
 
-# 触发器配置：使用 workflow_dispatch 支持手动触发
 on:
+  # 允许手动触发工作流
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Release tag（可选，不填则使用 run number 作为默认标签）'
-        required: false  # 是否为必填项
+      release_name:
+        description: '发布的名称（将作为打包文件名）'
+        required: true
+        type: string
 
 jobs:
-  # 定义一个名为 build 的任务
-  build:
-    # 在 Ubuntu 最新版本的虚拟环境中运行
+  build-and-release:
     runs-on: ubuntu-latest
-    # 全局环境变量：将 release_tag 或 run_number 存为 RELEASE_TAG
-    env:
-      RELEASE_TAG: ${{ github.event.inputs.release_tag || format('v{0}', github.run_number) }}
+    # 需要写入权限来创建 Releases
+    permissions:
+      contents: write
 
     steps:
-      # 步骤 1：检出当前工作流所在的仓库（为了获取工作流文件本身）
-      - name: Checkout this workflow repo
-        uses: actions/checkout@v3
+    # 生成唯一标签（使用时间戳格式）
+    - name: 生成唯一标签
+      id: generate_tag
+      run: echo "tag=$(date +'v%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      # 步骤 2：克隆目标仓库的指定分支（master-fix）到本地子目录 splayer
-      - name: Clone SPlayer repository
-        run: |
-          # --branch 用于指定分支，克隆到目录名为 splayer
-          git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
+    # 步骤1：克隆指定仓库的 master-fix 分支
+    - name: 克隆代码仓库
+      uses: actions/checkout@v4
+      with:
+        # 指定要克隆的外部仓库
+        repository: 'IamFurina/SPlayer'
+        # 指定分支名称
+        ref: 'master-fix'
 
-      # 步骤 3：设置 Node.js 运行环境，使用最新 LTS 版本
-      - name: Setup Node.js environment
-        uses: actions/setup-node@v3
-        with:
-          # 指定 Node.js 版本为最新 LTS
-          node-version: '20.x'
+    # 步骤2：复制环境变量文件
+    - name: 创建环境配置文件
+      run: cp .env.example .env
 
-      # 步骤 4：在克隆下来的项目目录中准备 .env 文件，并输出修改后内容
-      - name: Prepare .env file and display contents
-        working-directory: splayer  # 切换到 splayer 目录下执行命令
-        run: |
-          # 复制环境变量示例文件
-          cp .env.example .env
-          # 使用 sed 命令替换 .env 文件中的三个关键参数
-          sed -i 's|RENDERER_VITE_SERVER_URL=.*|RENDERER_VITE_SERVER_URL=https://musicapi.881128.xyz|' .env
-          sed -i 's|VITE_UNM_API=.*|VITE_UNM_API=https://unm.881128.xyz/|' .env
-          sed -i 's|RENDERER_VITE_SITE_URL=.*|RENDERER_VITE_SITE_URL=https://music.881128.xyz|' .env
-          # 输出修改后的 .env 文件内容，便于调试和确认
-          echo "=== Modified .env file ==="
-          cat .env
+    # 步骤3：使用 sed 命令修改环境变量（兼容 Linux 环境）
+    - name: 修改环境变量配置
+      run: |
+        # 替换音乐API地址（注意转义斜杠）
+        sed -i 's/^RENDERER_VITE_SERVER_URL=.*/RENDERER_VITE_SERVER_URL=https:\/\/musicapi.881128.xyz/' .env
+        
+        # 替换UNM API地址（保留结尾斜杠）
+        sed -i 's/^VITE_UNM_API=.*/VITE_UNM_API=https:\/\/unm.881128.xyz\//' .env
+        
+        # 替换站点地址
+        sed -i 's/^RENDERER_VITE_SITE_URL=.*/RENDERER_VITE_SITE_URL=https:\/\/music.881128.xyz/' .env
 
-      # 步骤 5：安装项目依赖，并开启详细日志显示安装进度
-      - name: Install dependencies with npm (verbose)
-        working-directory: splayer  # 确保在项目根目录执行命令
-        run: npm install --loglevel verbose  # 使用 verbose 日志级别，以便查看安装每个包的进度
+    # 步骤4：显示修改后的配置文件内容（用于调试）
+    - name: 显示修改后的环境文件
+      run: cat .env
 
-      # 步骤 6：执行项目构建命令，并开启详细日志以显示构建过程
-      - name: Build project with npm (verbose)
-        working-directory: splayer  # 在项目目录下运行构建命令
-        run: npm run build --loglevel verbose  # 开启 verbose 模式，输出详细构建日志
+    # 步骤5：配置 Node.js 环境
+    - name: 设置 Node.js 环境
+      uses: actions/setup-node@v4
+      with:
+        # 使用最新 LTS 版本
+        node-version: 'lts/*'
+        # 启用 pnpm 缓存
+        cache: 'pnpm'
 
-      # 步骤 7：打包渲染器输出目录，压缩包根据 RELEASE_TAG 动态命名
-      - name: Package renderer output
-        run: |
-          mkdir -p artifacts
-          cd splayer/out
-          # 使用环境变量 RELEASE_TAG 为压缩包动态命名
-          zip -r ../../artifacts/${RELEASE_TAG}.zip renderer
+    # 步骤6：安装 pnpm 包管理器
+    - name: 安装 pnpm
+      run: npm install -g pnpm
 
-      # 步骤 8：创建 GitHub Release
-      - name: Create GitHub Release
-        id: create_release  # 定义步骤 ID，供后续上传资产时引用
-        uses: actions/create-release@v1
-        env:
-          # 使用内置的 GITHUB_TOKEN 进行认证，自动生成 Release
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # 使用 RELEASE_TAG 作为 tag 名称和 Release 名称
-          tag_name: ${{ env.RELEASE_TAG }}
-          release_name: ${{ env.RELEASE_TAG }}
-          draft: false       # 是否为草稿 Release
-          prerelease: false  # 是否标记为预发行
+    # 步骤7：安装项目依赖（显示详细日志）
+    - name: 安装项目依赖
+      run: pnpm install --reporter append-only
 
-      # 步骤 9：上传打包好的资产到刚创建的 Release
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # 使用上一步骤 create_release 的输出 upload_url
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          # 本地资产路径，动态使用 RELEASE_TAG
-          asset_path: ./artifacts/${{ env.RELEASE_TAG }}.zip
-          # 在 Release 页面显示的文件名，也根据 RELEASE_TAG 动态命名
-          asset_name: ${{ env.RELEASE_TAG }}.zip
-          asset_content_type: application/zip       # 文件类型
+    # 步骤8：执行项目构建（显示详细日志）
+    - name: 构建项目
+      run: pnpm build
+
+    # 步骤9：打包构建产物（处理文件名中的空格）
+    - name: 打包构建结果
+      run: |
+        # 创建临时目录存放打包文件
+        mkdir -p artifact
+        # 使用双引号包裹文件名以支持空格
+        zip -r "artifact/${{ github.event.inputs.release_name }}.zip" out/renderer
+
+    # 步骤10：创建 GitHub Release 并上传
+    - name: 发布到 GitHub Releases
+      uses: softprops/action-gh-release@v1
+      with:
+        # 使用生成的唯一标签
+        tag_name: ${{ steps.generate_tag.outputs.tag }}
+        # 使用用户输入的发布名称
+        name: ${{ github.event.inputs.release_name }}
+        # 指定要上传的打包文件
+        files: artifact/${{ github.event.inputs.release_name }}.zip
+        # 设置为正式版（非预发布）
+        prerelease: false
+        # 自动生成发布说明
+        body: |
+          自动构建发布包含以下更新：
+          - 使用 Node.js 最新 LTS 版本
+          - 环境变量已更新配置
+          - 构建时间：${{ steps.generate_tag.outputs.tag }}
