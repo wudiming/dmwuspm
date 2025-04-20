@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       release_name:
-        description: '请输入本次 Release 的名称'
+        description: '请输入本次 Release 的名称，用于打包文件名和 GitHub Release 标签'
         required: true
 
 jobs:
@@ -33,45 +33,50 @@ jobs:
           echo "复制完成：splayer/.env"
 
       # ----------------------------------------------------
-      # 步骤 3：使用 Python 修改 .env 中的变量值
+      # 步骤 3：写入并执行 Python 脚本来更新 .env
       # ----------------------------------------------------
-      - name: 使用 Python 更新 .env 配置
+      - name: 写入 Env 更新脚本
+        run: |
+          cat << 'EOF' > splayer/update_env.py
+          #!/usr/bin/env python3
+          import io, sys
+
+          env_file = 'splayer/.env'
+          # 读取原始文件
+          with io.open(env_file, 'r', encoding='utf-8') as f:
+              lines = f.readlines()
+
+          # 定义要替换的键值
+          mapping = {
+              'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
+              'VITE_UNM_API': 'https://unm.881128.xyz/',
+              'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
+          }
+
+          new_lines = []
+          for line in lines:
+              # 如果是目标行，就替换
+              for key, val in mapping.items():
+                  if line.startswith(f"{key}="):
+                      line = f"{key}={val}\n"
+                      break
+              new_lines.append(line)
+
+          # 写回文件
+          with io.open(env_file, 'w', encoding='utf-8') as f:
+              f.writelines(new_lines)
+
+          # 打印结果以供验证
+          print("===== .env 文件修改后内容 =====")
+          with io.open(env_file, 'r', encoding='utf-8') as f:
+              sys.stdout.write(f.read())
+          print("===== 结束 =====")
+          EOF
+
+      - name: 执行 Env 更新脚本
         run: |
           echo "开始通过 Python 脚本批量替换 .env 中的配置项..."
-          python3 - << 'EOF'
-import io, sys
-
-env_file = 'splayer/.env'
-# 读取原始文件内容
-with io.open(env_file, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
-
-# 新的配置值映射表
-mapping = {
-    'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
-    'VITE_UNM_API': 'https://unm.881128.xyz/',
-    'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
-}
-
-new_lines = []
-for line in lines:
-    # 如果行以某个变量名开头，则替换该行
-    for key, val in mapping.items():
-        if line.startswith(f"{key}="):
-            line = f"{key}={val}\n"
-            break
-    new_lines.append(line)
-
-# 将替换后的内容写回文件
-with io.open(env_file, 'w', encoding='utf-8') as f:
-    f.writelines(new_lines)
-
-# 输出修改后的完整文件内容，以便调试查看
-print("===== .env 文件修改后内容 =====")
-with io.open(env_file, 'r', encoding='utf-8') as f:
-    sys.stdout.write(f.read())
-print("===== 结束 =====")
-EOF
+          python3 splayer/update_env.py
 
       # ----------------------------------------------------
       # 步骤 4：设置 Node.js 环境（使用最新 LTS 版本）
