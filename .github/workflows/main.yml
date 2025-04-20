@@ -1,0 +1,71 @@
+name: Build and Release SPlayer Renderer
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (optional, defaults to run number)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this workflow repo
+        uses: actions/checkout@v3
+
+      - name: Clone SPlayer repository
+        run: |
+          git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
+          cd splayer
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Prepare .env file
+        working-directory: splayer
+        run: |
+          cp .env.example .env
+          sed -i 's|RENDERER_VITE_SERVER_URL=.*|RENDERER_VITE_SERVER_URL=https://musicapi.881128.xyz|' .env
+          sed -i 's|VITE_UNM_API=.*|VITE_UNM_API=https://unm.881128.xyz/|' .env
+          sed -i 's|RENDERER_VITE_SITE_URL=.*|RENDERER_VITE_SITE_URL=https://music.881128.xyz|' .env
+
+      - name: Install dependencies
+        working-directory: splayer
+        run: pnpm install
+
+      - name: Build project
+        working-directory: splayer
+        run: pnpm build
+
+      - name: Package renderer output
+        run: |
+          cd splayer/out
+          zip -r ../../artifacts/renderer.zip renderer
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || format('v{0}', github.run_number) }}
+          release_name: ${{ github.event.inputs.release_tag || format('Release {0}', github.run_number) }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/renderer.zip
+          asset_name: renderer.zip
+          asset_content_type: application/zip
