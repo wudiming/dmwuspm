@@ -1,121 +1,115 @@
-name: Build and Release SPlayer
+name: 构建并发布SPlayer
 
 on:
   # 允许手动触发工作流
   workflow_dispatch:
     inputs:
       release_name:
-        description: 'Release名称'
-        required: true
+        description: 'Release名称（留空自动生成）'
+        required: false  # 改为非必填
         type: string
 
 jobs:
-  build-and-release:
+  build-release:
     runs-on: ubuntu-latest
 
     steps:
-    # 步骤1：克隆指定仓库的master-fix分支
-    - name: 克隆仓库
+    # 步骤1：克隆指定仓库
+    - name: 克隆代码库
       uses: actions/checkout@v4
       with:
-        # 指定要克隆的仓库地址
         repository: 'IamFurina/SPlayer'
-        # 指定要克隆的分支
-        ref: 'master-fix'
-        # 将仓库克隆到splayer子目录
-        path: splayer
+        ref: 'master-fix'  # 指定分支
+        path: 'splayer'    # 克隆到子目录
 
-    # 步骤2：设置Python环境（用于修改.env文件）
+    # 步骤2：配置Python环境
     - name: 设置Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.x'
+        python-version: '3.10'  # 指定明确版本更安全
 
-    # 步骤3：处理.env文件
+    # 步骤3：处理环境变量文件
     - name: 配置环境变量
-      working-directory: ./splayer  # 进入项目目录
+      working-directory: ./splayer
       run: |
-        # 复制环境示例文件
+        # 复制模板文件
         cp .env.example .env
 
-        # 使用Python脚本修改.env文件
+        # Python修改脚本
         python <<EOF
         import re
-        
-        # 需要修改的配置项
+        from pathlib import Path
+
+        # 配置替换字典
         replacements = {
             'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
             'VITE_UNM_API': 'https://unm.881128.xyz/',
             'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
         }
-        
-        # 读取.env文件内容
-        with open('.env', 'r') as f:
-            lines = f.readlines()
-        
-        # 逐行查找并替换配置
-        new_lines = []
-        for line in lines:
-            for key, value in replacements.items():
-                # 使用正则匹配键名（兼容各种可能的格式）
-                if re.match(f'^{key}=', line.strip()):
-                    line = f'{key}={value}\n'
-                    break
-            new_lines.append(line)
-        
-        # 写入修改后的内容
-        with open('.env', 'w') as f:
-            f.writelines(new_lines)
-        
-        # 打印修改后的文件内容
-        print("修改后的.env文件内容：")
-        with open('.env', 'r') as f:
-            print(f.read())
+
+        # 读取文件内容
+        env_file = Path('.env')
+        content = env_file.read_text()
+
+        # 使用正则进行精准替换
+        for key, value in replacements.items():
+            pattern = re.compile(fr'^{key}=.*$', re.MULTILINE)
+            content = pattern.sub(f'{key}={value}', content)
+
+        # 写回文件并打印结果
+        env_file.write_text(content)
+        print("最终.env文件内容：\n" + content)
         EOF
 
-    # 步骤4：设置Node.js环境
+    # 步骤4：配置Node环境
     - name: 设置Node.js
       uses: actions/setup-node@v3
       with:
-        node-version: 'latest'  # 使用最新版Node.js
-        cache: 'npm'           # 启用npm缓存加速安装
+        node-version: '20'  # 指定LTS版本
+        cache: 'npm'
 
     # 步骤5：安装依赖并构建
-    - name: 安装依赖和构建
-      working-directory: ./splayer  # 确保在项目目录执行
+    - name: 构建项目
+      working-directory: ./splayer
       run: |
-        # 显示详细版本信息
-        node -v
-        npm -v
-        
-        # 安装依赖（显示完整进度）
-        npm install --loglevel verbose
-        
-        # 执行构建命令
-        npm run build --if-present
+        # 打印环境信息
+        echo "Node版本: $(node -v)"
+        echo "NPM版本: $(npm -v)"
 
-    # 步骤6：打包构建结果
-    - name: 打包构建产物
-      working-directory: ./splayer  # 进入项目目录
+        # 安装依赖（显示详细日志）
+        npm ci --prefer-offline --no-audit --progress=true
+
+        # 执行构建
+        npm run build
+
+    # 步骤6：打包构建产物
+    - name: 打包发布文件
+      working-directory: ./splayer
       run: |
-        # 创建临时目录存放打包文件
-        mkdir -p artifact
-        
-        # 使用当前日期时间作为默认打包文件名
-        default_name=$(date +'build-%Y%m%d-%H%M%S')
-        
-        # 打包renderer目录（使用输入参数或默认名称）
-        tar -czvf artifact/${{ inputs.release_name || default_name }}.tar.gz -C out/renderer .
+        # 创建产物目录
+        mkdir -p release_pkg
 
-    # 步骤7：发布到GitHub Releases
+        # 处理release名称
+        if [ -z "${{ inputs.release_name }}" ]; then
+          PKG_NAME="build-$(date +%Y%m%d-%H%M%S)"
+        else
+          PKG_NAME="${{ inputs.release_name }}"
+        fi
+
+        # 打包renderer目录
+        tar -czvf "release_pkg/${PKG_NAME}.tar.gz" -C out/renderer .
+
+        # 打印打包结果
+        ls -lh release_pkg/
+
+    # 步骤7：发布到GitHub
     - name: 创建Release
       uses: softprops/action-gh-release@v1
       with:
-        # 使用手动输入的release名称
-        name: ${{ inputs.release_name }}
-        # 上传打包好的文件
+        # 自动生成release名称
+        name: ${{ inputs.release_name || '自动构建' }}
+        body: "构建时间：${{ github.run_started_at }}"
         files: |
-          splayer/artifact/*.tar.gz
+          splayer/release_pkg/*.tar.gz
       env:
-        # 使用GitHub自动生成的token
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
