@@ -1,115 +1,140 @@
-name: 构建并发布SPlayer
+name: 可靠构建发布SPlayer
 
 on:
-  # 允许手动触发工作流
   workflow_dispatch:
     inputs:
       release_name:
         description: 'Release名称（留空自动生成）'
-        required: false  # 改为非必填
+        required: false
         type: string
 
 jobs:
-  build-release:
+  reliable-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-    # 步骤1：克隆指定仓库
-    - name: 克隆代码库
+    # 步骤1：可靠克隆代码
+    - name: 克隆仓库（master-fix分支）
       uses: actions/checkout@v4
       with:
-        repository: 'IamFurina/SPlayer'
-        ref: 'master-fix'  # 指定分支
-        path: 'splayer'    # 克隆到子目录
+        repository: IamFurina/SPlayer
+        ref: master-fix
+        path: splayer
+        # 增加克隆失败重试机制
+        retries: 3
+        retry-wait: 10
 
-    # 步骤2：配置Python环境
-    - name: 设置Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'  # 指定明确版本更安全
-
-    # 步骤3：处理环境变量文件
-    - name: 配置环境变量
+    # 步骤2：精准修改环境变量
+    - name: 配置环境变量（Python精准处理）
       working-directory: ./splayer
       run: |
-        # 复制模板文件
-        cp .env.example .env
+        # 保留原文件时间戳
+        cp -p .env.example .env
 
-        # Python修改脚本
         python <<EOF
         import re
         from pathlib import Path
 
-        # 配置替换字典
+        # 需要修改的配置项（值需包含引号）
         replacements = {
-            'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
-            'VITE_UNM_API': 'https://unm.881128.xyz/',
-            'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
+            'RENDERER_VITE_SERVER_URL': '"https://musicapi.881128.xyz"',
+            'VITE_UNM_API': '"https://unm.881128.xyz/"',
+            'RENDERER_VITE_SITE_URL': '"https://music.881128.xyz"'
         }
 
-        # 读取文件内容
-        env_file = Path('.env')
-        content = env_file.read_text()
+        env_path = Path('.env')
+        content = env_path.read_text()
 
-        # 使用正则进行精准替换
-        for key, value in replacements.items():
-            pattern = re.compile(fr'^{key}=.*$', re.MULTILINE)
-            content = pattern.sub(f'{key}={value}', content)
+        # 精准匹配模式（匹配未注释的键值对）
+        patterns = {
+            key: re.compile(
+                r'^([ ]*)({})([ ]*=[ ]*)(.*?)([ ]*(#.*)?)$'.format(re.escape(key)), 
+                flags=re.MULTILINE
+            )
+            for key in replacements.keys()
+        }
 
-        # 写回文件并打印结果
-        env_file.write_text(content)
-        print("最终.env文件内容：\n" + content)
+        # 执行替换（保留格式和注释）
+        for key, pattern in patterns.items():
+            replacement = r'\1\2\3{}\5'.format(replacements[key])
+            content = pattern.sub(replacement, content)
+
+        # 验证至少修改了三处
+        modified_count = sum(content.count(new_value) for new_value in replacements.values())
+        if modified_count < 3:
+            raise ValueError(f"关键配置项未全部修改，只找到{modified_count}处修改")
+
+        env_path.write_text(content)
+        print("验证修改后的.env文件：\n" + content)
         EOF
 
-    # 步骤4：配置Node环境
-    - name: 设置Node.js
+    # 步骤3：稳定Node环境配置
+    - name: 配置Node.js环境
       uses: actions/setup-node@v3
       with:
-        node-version: '20'  # 指定LTS版本
+        node-version: '20.x'
+        # 自动检测并缓存依赖
         cache: 'npm'
+        cache-dependency-path: splayer/package-lock.json
 
-    # 步骤5：安装依赖并构建
-    - name: 构建项目
+    # 步骤4：可靠依赖安装
+    - name: 安装项目依赖
       working-directory: ./splayer
       run: |
-        # 打印环境信息
-        echo "Node版本: $(node -v)"
-        echo "NPM版本: $(npm -v)"
-
-        # 安装依赖（显示详细日志）
-        npm ci --prefer-offline --no-audit --progress=true
-
-        # 执行构建
-        npm run build
-
-    # 步骤6：打包构建产物
-    - name: 打包发布文件
-      working-directory: ./splayer
-      run: |
-        # 创建产物目录
-        mkdir -p release_pkg
-
-        # 处理release名称
-        if [ -z "${{ inputs.release_name }}" ]; then
-          PKG_NAME="build-$(date +%Y%m%d-%H%M%S)"
-        else
-          PKG_NAME="${{ inputs.release_name }}"
+        # 确保存在package.json
+        if [ ! -f package.json ]; then
+          echo "错误：package.json文件不存在"
+          exit 1
         fi
 
-        # 打包renderer目录
-        tar -czvf "release_pkg/${PKG_NAME}.tar.gz" -C out/renderer .
+        # 生成锁文件（如果不存在）
+        if [ ! -f package-lock.json ]; then
+          echo "生成package-lock.json..."
+          npm i --package-lock-only
+        fi
 
-        # 打印打包结果
-        ls -lh release_pkg/
+        # 安装依赖（严格模式）
+        echo "开始安装依赖..."
+        npm ci --no-audit --progress=false --loglevel=error
+        echo "依赖安装完成！"
+
+    # 步骤5：构建项目
+    - name: 执行项目构建
+      working-directory: ./splayer
+      run: |
+        # 带错误检查的构建
+        set -e
+        npm run build -- --prod --aot
+        [ -d out/renderer ] || (echo "构建输出目录不存在"; exit 1)
+
+    # 步骤6：打包发布文件
+    - name: 准备发布包
+      working-directory: ./splayer
+      run: |
+        # 带格式校验的文件打包
+        release_name="${RELEASE_NAME:-build-$(date +%Y%m%d-%H%M%S)}"
+        
+        # 验证renderer目录结构
+        [ -f out/renderer/index.html ] || (echo "缺少入口文件"; exit 1)
+        
+        # 创建带版本信息的压缩包
+        tar -czvf "release/${release_name}.tar.gz" \
+          --transform "s,^out/renderer,${release_name}," \
+          out/renderer
 
     # 步骤7：发布到GitHub
-    - name: 创建Release
+    - name: 创建正式Release
       uses: softprops/action-gh-release@v1
       with:
-        # 自动生成release名称
         name: ${{ inputs.release_name || '自动构建' }}
-        body: "构建时间：${{ github.run_started_at }}"
+        tag_name: build-${{ github.run_id }}
+        body: |
+          构建详情：
+          - 时间：${{ github.run_started_at }}
+          - 提交：${{ github.sha }}
+          - 触发者：${{ github.actor }}
         files: |
-          splayer/release_pkg/*.tar.gz
+          splayer/release/*.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
