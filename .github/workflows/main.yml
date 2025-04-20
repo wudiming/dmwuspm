@@ -17,7 +17,6 @@ jobs:
       - name: Clone SPlayer repository
         run: |
           git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
-          cd splayer
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -25,8 +24,10 @@ jobs:
           node-version: '18'
           cache: 'pnpm'
 
-      - name: Install pnpm
-        run: npm install -g pnpm
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 7
 
       - name: Prepare .env file
         working-directory: splayer
@@ -46,6 +47,7 @@ jobs:
 
       - name: Package renderer output
         run: |
+          mkdir -p artifacts
           cd splayer/out
           zip -r ../../artifacts/renderer.zip renderer
 
