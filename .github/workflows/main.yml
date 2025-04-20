@@ -1,6 +1,5 @@
 name: 构建并发布 SPlayer
 
-# 1. 手动触发，并要求输入 Release 名称
 on:
   workflow_dispatch:
     inputs:
@@ -14,113 +13,94 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ----------------------------------------------------
-      # 步骤 1：克隆 SPlayer(master-fix 分支)
-      # ----------------------------------------------------
+      # 步骤 1：克隆指定分支
       - name: 克隆 SPlayer(master-fix 分支)
         run: |
           echo "开始克隆 IamFurina/SPlayer 仓库的 master-fix 分支..."
           git clone --branch master-fix https://github.com/IamFurina/SPlayer.git splayer
-          echo "克隆完成：目录 splayer"
+          echo "克隆完成"
 
-      # ----------------------------------------------------
       # 步骤 2：复制 .env.example 为 .env
-      # ----------------------------------------------------
-      - name: 准备环境配置文件 (.env)
+      - name: 准备 .env 文件
         run: |
-          echo "复制 .env.example 为 .env 文件..."
+          echo "复制 .env.example 为 .env..."
           cp splayer/.env.example splayer/.env
-          echo "复制完成：splayer/.env"
+          echo "复制完成"
 
-      # ----------------------------------------------------
-      # 步骤 3：写入并执行修正版 Python 脚本来更新 .env
-      # ----------------------------------------------------
-      - name: 写入 Env 更新脚本
+      # 步骤 3：Python 一步替换 .env 内容并输出结果
+      - name: 更新 .env 变量
         run: |
-          cat << 'EOF' > splayer/update_env.py
+          echo "开始更新 .env..."
+          python3 - << 'EOF'
 #!/usr/bin/env python3
-import re
+import re, sys
 
-env_file = 'splayer/.env'
-with open(env_file, 'r', encoding='utf-8') as f:
+env_path = 'splayer/.env'
+with open(env_path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# 要替换的键值映射（保持等号两侧空格和双引号格式）
 mapping = {
     'RENDERER_VITE_SERVER_URL': 'https://musicapi.881128.xyz',
-    'VITE_UNM_API': 'https://unm.881128.xyz/',
-    'RENDERER_VITE_SITE_URL': 'https://music.881128.xyz'
+    'VITE_UNM_API':              'https://unm.881128.xyz/',
+    'RENDERER_VITE_SITE_URL':    'https://music.881128.xyz'
 }
 
 for key, val in mapping.items():
-    # 匹配带空格和双引号的行
-    pattern = rf'^{key}\s*=\s*".*"'
-    replacement = f'{key} = "{val}"'
-    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+    # 匹配 key= 前面可能有空格，value 统一加双引号
+    content = re.sub(
+        rf'^{key}\s*=.*$',
+        f'{key} = "{val}"',
+        content,
+        flags=re.MULTILINE
+    )
 
-with open(env_file, 'w', encoding='utf-8') as f:
+with open(env_path, 'w', encoding='utf-8') as f:
     f.write(content)
 
-# 输出最终 .env 内容，供日志查看
-print("===== .env 文件修改后内容 =====")
+print("===== .env 修改后内容 =====")
 print(content)
 print("===== 结束 =====")
 EOF
 
-      - name: 执行 Env 更新脚本
-        run: |
-          echo "开始通过 Python 脚本批量替换 .env 中的配置项..."
-          python3 splayer/update_env.py
-
-      # ----------------------------------------------------
-      # 步骤 4：设置 Node.js 环境（最新 LTS），并缓存依赖
-      # ----------------------------------------------------
-      - name: 设置 Node.js (最新 LTS)
+      # 步骤 4：设置 Node.js（最新 LTS）、缓存 npm
+      - name: 设置 Node.js 环境
         uses: actions/setup-node@v3
         with:
-          node-version: lts/*
+          node-version: 'lts/*'
           cache: 'npm'
           cache-dependency-path: splayer/package.json
 
-      # ----------------------------------------------------
-      # 步骤 5：安装 npm 依赖，显示详细日志
-      # ----------------------------------------------------
+      # 步骤 5：安装依赖（verbose 模式）
       - name: 安装 npm 依赖
         working-directory: splayer
         run: |
-          echo "🔧 开始安装 npm 依赖..."
+          echo "🔧 安装依赖中..."
           npm install --verbose
           echo "✅ 依赖安装完成"
 
-      # ----------------------------------------------------
-      # 步骤 6：构建项目，显示详细日志
-      # ----------------------------------------------------
-      - name: 构建项目 (npm run build)
+      # 步骤 6：构建项目（verbose 模式）
+      - name: 构建项目
         working-directory: splayer
         run: |
-          echo "🏗️  开始项目构建..."
+          echo "🏗️ 构建中..."
           npm run build --verbose
           echo "✅ 构建完成"
 
-      # ----------------------------------------------------
-      # 步骤 7：打包 out/renderer 目录（生成 .zip 和 .tar.gz）
-      # ----------------------------------------------------
-      - name: 打包 renderer 输出目录
+      # 步骤 7：打包 renderer 输出（.zip & .tar.gz）
+      - name: 打包 renderer 目录
         run: |
-          echo "📦 打包 splayer/out/renderer 目录..."
+          echo "📦 打包 splayer/out/renderer..."
           cd splayer/out
           zip -r "../${{ github.event.inputs.release_name }}.zip" renderer
           tar -czf "../${{ github.event.inputs.release_name }}.tar.gz" renderer
-          echo "✅ 打包完成：生成 .zip 和 .tar.gz"
+          echo "✅ 打包完成"
 
-      # ----------------------------------------------------
-      # 步骤 8：创建 GitHub Release 并上传两个压缩包
-      # ----------------------------------------------------
-      - name: 发布 Release 并上传资产
+      # 步骤 8：创建 Release 并上传两种压缩包
+      - name: 发布 GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.release_name }}
-          name: ${{ github.event.inputs.release_name }}
+          name:     ${{ github.event.inputs.release_name }}
           files: |
             splayer/out/${{ github.event.inputs.release_name }}.zip
             splayer/out/${{ github.event.inputs.release_name }}.tar.gz
