@@ -1,0 +1,170 @@
+name: SPlayer 构建发布
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: '发布名称（示例：v1.2.0）'
+        required: false
+        type: string
+
+env:
+  PROJECT_DIR: splayer  # 项目子目录
+  NODE_VERSION: 20.x    # 锁定Node版本
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+    # ========== 代码克隆 ==========
+    - name: 克隆仓库（master-fix分支）
+      uses: actions/checkout@v4
+      with:
+        repository: IamFurina/SPlayer
+        ref: master-fix
+        path: ${{ env.PROJECT_DIR }}
+        fetch-depth: 0  # 完整克隆历史
+
+    # ========== 环境变量配置 ==========
+    - name: 配置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: 修改环境变量文件
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        # 保留原文件属性复制
+        cp -p .env.example .env
+
+        python <<"EOF"
+        import re
+        from pathlib import Path
+        
+        # 配置替换映射（保留引号）
+        replacements = {
+            'RENDERER_VITE_SERVER_URL': '"https://musicapi.881128.xyz"',
+            'VITE_UNM_API': '"https://unm.881128.xyz/"',
+            'RENDERER_VITE_SITE_URL': '"https://music.881128.xyz"'
+        }
+        
+        env_file = Path('.env')
+        content = env_file.read_text()
+        
+        # 构建动态正则模式（兼容各种格式）
+        patterns = {}
+        for key in replacements.keys():
+            # 匹配：键名 + 任意空格 + = + 任意空格 + 值 + 可选注释
+            patterns[key] = re.compile(
+                rf'^{key}\s*=\s*["\']?(.*?)["\']?(\s*#.*)?$',
+                re.MULTILINE
+            )
+        
+        # 执行替换并计数
+        modified = 0
+        for key, pattern in patterns.items():
+            new_content, count = pattern.subn(
+                f'{key} = {replacements[key]}', 
+                content
+            )
+            if count > 0:
+                content = new_content
+                modified += 1
+        
+        # 验证必须修改3个配置项
+        if modified != 3:
+            raise ValueError(f"应修改3个配置项，实际修改了{modified}个")
+        
+        env_file.write_text(content)
+        print("验证修改结果：\n" + content)
+        EOF
+
+    # ========== Node.js 配置 ==========
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+        cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+
+    # ========== 依赖安装 ==========
+    - name: 处理项目依赖
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        # 检查必要文件存在
+        [ -f package.json ] || { echo "错误：找不到package.json"; exit 1; }
+        
+        # 自动生成锁文件（如果需要）
+        if [ ! -f package-lock.json ]; then
+          echo "生成package-lock.json..."
+          npm install --package-lock-only --no-audit
+          
+          # 可选：提交生成的锁文件
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add package-lock.json
+          git commit -m "自动生成依赖锁文件" || echo "无新锁文件需要提交"
+        fi
+
+        # 安装依赖（带缓存优化）
+        echo "正在安装依赖..."
+        npm ci --no-audit --prefer-offline --loglevel=error
+        echo "依赖安装完成！"
+
+    # ========== 项目构建 ==========
+    - name: 执行项目构建
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        # 显示环境信息
+        echo "Node版本: $(node -v)"
+        echo "NPM版本: $(npm -v)"
+        
+        # 带错误检查的构建
+        set -e
+        npm run build -- --prod
+        
+        # 验证构建输出
+        [ -d out/renderer ] || { echo "构建失败：缺失out/renderer目录"; exit 1; }
+        [ -f out/renderer/index.html ] || { echo "构建失败：缺失入口文件"; exit 1; }
+
+    # ========== 发布准备 ==========
+    - name: 打包构建产物
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        # 创建发布目录
+        mkdir -p release
+        
+        # 处理发布名称
+        if [ -z "${{ inputs.release_name }}" ]; then
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          RELEASE_NAME="build-${TIMESTAMP}"
+        else
+          RELEASE_NAME="${{ inputs.release_name }}"
+        fi
+        
+        # 打包文件（保留目录结构）
+        tar -czvf "release/${RELEASE_NAME}.tar.gz" \
+          --transform "s/^out\/renderer/${RELEASE_NAME}/" \
+          out/renderer
+        
+        # 显示打包结果
+        echo "生成文件："
+        ls -lh release/
+
+    # ========== 发布到GitHub ==========
+    - name: 创建版本发布
+      uses: softprops/action-gh-release@v1
+      with:
+        name: ${{ inputs.release_name || '自动构建' }}
+        tag_name: build-${{ github.run_number }}
+        body: |
+          构建信息：
+          - 触发时间：${{ github.run_started_at }}
+          - 提交版本：[${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+          - 工作流程：[${{ github.workflow }} #${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        files: |
+          ${{ env.PROJECT_DIR }}/release/*.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
