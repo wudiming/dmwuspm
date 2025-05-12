@@ -29,7 +29,12 @@ jobs:
         path: ${{ env.PROJECT_DIR }}
         fetch-depth: 0  # 必须获取完整历史记录
 
-    # ========== 2. 检查新tag（定时和手动触发均执行） ==========
+    # ========== 2. 创建缓存目录 ==========
+    - name: 初始化缓存目录
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: mkdir -p cache
+
+    # ========== 3. 检查新tag ==========
     - name: 获取最新tag
       id: get-tag
       working-directory: ${{ env.PROJECT_DIR }}
@@ -43,31 +48,41 @@ jobs:
       id: restore-tag
       uses: actions/cache@v3
       with:
-        path: ${{ env.PROJECT_DIR }}/.last_tag
-        key: last-tag-${{ github.repository }}
+        path: ${{ env.PROJECT_DIR }}/cache/tag.md
+        key: tag-cache-${{ github.repository }}
         restore-keys: |
-          last-tag-${{ github.repository }}
+          tag-cache-${{ github.repository }}
+
+    - name: 处理首次运行逻辑
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        # 首次运行检测
+        if [ ! -f cache/tag.md ]; then
+          echo "首次运行，记录初始tag"
+          echo "${{ steps.get-tag.outputs.LATEST_TAG }}" > cache/tag.md
+          echo "::set-output name=first_run::true"
+          exit 0
+        else
+          echo "::set-output name=first_run::false"
+        fi
+
+    - name: 终止首次运行
+      if: steps.handle-first-run.outputs.first_run == 'true'
+      run: exit 0
 
     - name: 检查tag更新
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
-        # 处理首次运行
-        if [ -f .last_tag ]; then
-          OLD_TAG=$(cat .last_tag)
-          echo "上次记录的tag: $OLD_TAG"
-        else
-          echo "首次运行，记录当前tag"
-          echo "${{ steps.get-tag.outputs.LATEST_TAG }}" > .last_tag
-          exit 0  # 首次运行直接继续
-        fi
+        OLD_TAG=$(cat cache/tag.md)
+        echo "缓存中的旧tag: $OLD_TAG"
+        echo "当前最新tag: ${{ steps.get-tag.outputs.LATEST_TAG }}"
 
-        # 检查是否有新tag
         if [ "${{ steps.get-tag.outputs.LATEST_TAG }}" == "$OLD_TAG" ]; then
           echo "没有新tag，终止流程"
           exit 1
         else
           echo "检测到新tag，更新缓存"
-          echo "${{ steps.get-tag.outputs.LATEST_TAG }}" > .last_tag
+          echo "${{ steps.get-tag.outputs.LATEST_TAG }}" > cache/tag.md
         fi
 
     # ========== 3. 配置运行时 ==========
