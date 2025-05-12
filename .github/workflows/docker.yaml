@@ -11,7 +11,7 @@ on:
     - cron: '0 0 * * 1'  # 每周一 UTC 时间 0 点执行
 
 env:
-  PROJECT_DIR: SPlayer  # 大写目录
+  PROJECT_DIR: SPlayer
   DOCKER_IMAGE_NAME: splayer-pro
 
 jobs:
@@ -20,66 +20,71 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    # ========== 1. 克隆代码 ==========
-    - name: 克隆仓库 (master-fix分支)
+    # ========== 1. 克隆代码（含历史记录） ==========
+    - name: 克隆仓库
       uses: actions/checkout@v4
       with:
         repository: IamFurina/SPlayer
         ref: master-fix
-        fetch-depth: 0  # 必须获取完整历史记录
+        fetch-depth: 0  # 获取完整提交历史
+        persist-credentials: true  # 保留推送权限
 
-    # ========== 2. 检查新tag ==========
+    # ========== 2. 获取最新tag ==========
     - name: 获取最新tag
       id: get-tag
       run: |
         git fetch --tags
         LATEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
-        echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
-        echo "current_tag=$LATEST_TAG" >> $GITHUB_ENV
+        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        echo "CURRENT_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
-    # ========== 3. 处理缓存文件 ==========
-    - name: 初始化缓存目录
+    # ========== 3. 初始化缓存目录 ==========
+    - name: 创建缓存目录
       run: mkdir -p cache
 
-    - name: 恢复缓存tag
-      id: restore-tag
-      uses: actions/cache@v3
-      with:
-        path: cache/tag.md
-        key: tag-cache-${{ github.repository }}
-        restore-keys: |
-          tag-cache-${{ github.repository }}
-
     # ========== 4. 首次运行处理 ==========
-    - name: 检测首次运行
-      id: check-first-run
+    - name: 检查并创建tag文件
+      id: init-tag-file
       run: |
         if [ ! -f cache/tag.md ]; then
-          echo "首次运行，记录初始tag"
-          echo "${{ env.current_tag }}" > cache/tag.md
-          echo "FIRST_RUN=true" >> $GITHUB_ENV
+          echo "首次运行，创建tag文件"
+          echo "${{ env.CURRENT_TAG }}" > cache/tag.md
+          
+          # 提交文件到仓库
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add cache/tag.md
+          git commit -m "chore: 初始化tag记录文件"
+          git push
+          
+          echo "首次运行已记录tag并提交到仓库"
           exit 0
-        else
-          echo "FIRST_RUN=false" >> $GITHUB_ENV
         fi
 
-    - name: 终止首次运行
-      if: env.FIRST_RUN == 'true'
+    # ========== 5. 终止首次运行 ==========
+    - name: 结束首次运行
+      if: steps.init-tag-file.outcome == 'success' && env.CURRENT_TAG != ''
       run: exit 0
 
-    # ========== 5. 检查tag更新 ==========
+    # ========== 6. 检查tag更新 ==========
     - name: 对比tag版本
       run: |
-        OLD_TAG=$(cat cache/tag.md)
-        echo "缓存中的旧tag: $OLD_TAG"
-        echo "当前最新tag: ${{ env.current_tag }}"
-
-        if [ "${{ env.current_tag }}" == "$OLD_TAG" ]; then
+        echo "当前最新tag: ${{ env.CURRENT_TAG }}"
+        echo "记录的旧tag: $(cat cache/tag.md)"
+        
+        if [ "${{ env.CURRENT_TAG }}" == "$(cat cache/tag.md)" ]; then
           echo "没有新tag，终止流程"
           exit 1
         else
-          echo "检测到新tag，更新缓存"
-          echo "${{ env.current_tag }}" > cache/tag.md
+          echo "检测到新tag，准备更新文件"
+          echo "${{ env.CURRENT_TAG }}" > cache/tag.md
+          
+          # 更新文件到仓库
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add cache/tag.md
+          git commit -m "chore: 更新tag记录到${{ env.CURRENT_TAG }}"
+          git push
         fi
 
     # ========== 3. 配置运行时 ==========
