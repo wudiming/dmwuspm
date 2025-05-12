@@ -1,170 +1,173 @@
 name: SPlayer 全自动构建及容器化
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
-    inputs:
-      release_name:
-        description: '发布名称（留空自动生成）'
-        required: false
-        type: string
   schedule:
-    - cron: '0 0 * * 1'  # 每周一 UTC 时间 0 点执行
+    # 每周一 00:00 (UTC-8) => 星期一 08:00 UTC
+    - cron: '0 8 * * 1'
 
 env:
   PROJECT_DIR: SPlayer
   DOCKER_IMAGE_NAME: splayer-pro
 
 jobs:
-  precise-build:
+  record-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
-    # ========== 1. 克隆代码（含历史记录） ==========
-    - name: 克隆仓库
-      uses: actions/checkout@v4
-      with:
-        repository: IamFurina/SPlayer
-        ref: master-fix
-        fetch-depth: 0  # 获取完整提交历史
-        persist-credentials: true  # 保留推送权限
+      # ========== 1. Checkout 当前仓库 ==========
+      - name: Checkout 当前仓库
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
-    # ========== 2. 获取最新tag ==========
-    - name: 获取最新tag
-      id: get-tag
-      run: |
-        git fetch --tags
-        LATEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
-        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-        echo "CURRENT_TAG=$LATEST_TAG" >> $GITHUB_ENV
+      # ========== 2. 初始化 temp 目录 ==========
+      - name: 初始化 temp 目录
+        run: mkdir -p temp
 
-    # ========== 3. 初始化缓存目录 ==========
-    - name: 创建缓存目录
-      run: mkdir -p cache
+      # ========== 3. 读取本地旧版本 ==========
+      - name: 读取本地旧版本
+        id: read_old_tag
+        run: |
+          OLD_TAG=$(cat temp/tag.md 2>/dev/null || echo "")
+          echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
 
-    # ========== 4. 首次运行处理 ==========
-    - name: 检查并创建tag文件
-      id: init-tag-file
-      run: |
-        if [ ! -f cache/tag.md ]; then
-          echo "首次运行，创建tag文件"
-          echo "${{ env.CURRENT_TAG }}" > cache/tag.md
-          
-          # 提交文件到仓库
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add cache/tag.md
-          git commit -m "chore: 初始化tag记录文件"
-          git push
-          
-          echo "首次运行已记录tag并提交到仓库"
-          exit 0
-        fi
+      # ========== 4. 获取 IamFurina/SPlayer 最新版本号 ==========
+      - name: 获取 IamFurina/SPlayer 最新版本号
+        id: get_latest_tag
+        run: |
+          LATEST_TAG=$(git ls-remote --tags https://github.com/IamFurina/SPlayer.git \
+            | awk '{print $2}' \
+            | sed 's@refs/tags/@@' \
+            | grep -E '^[0-9]' \
+            | sort -V \
+            | tail -n1)
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-    # ========== 5. 终止首次运行 ==========
-    - name: 结束首次运行
-      if: steps.init-tag-file.outcome == 'success' && env.CURRENT_TAG != ''
-      run: exit 0
+      # ========== 5. 比对新旧版本 ==========
+      - name: 比对新旧版本
+        run: |
+          if [ "${{ steps.read_old_tag.outputs.old_tag }}" = "${{ steps.get_latest_tag.outputs.latest_tag }}" ]; then
+            echo "版本未更新 (${{ steps.get_latest_tag.outputs.latest_tag }})，脚本结束。"
+            exit 0
+          fi
 
-    # ========== 6. 检查tag更新 ==========
-    - name: 对比tag版本
-      run: |
-        echo "当前最新tag: ${{ env.CURRENT_TAG }}"
-        echo "记录的旧tag: $(cat cache/tag.md)"
-        
-        if [ "${{ env.CURRENT_TAG }}" == "$(cat cache/tag.md)" ]; then
-          echo "没有新tag，终止流程"
-          exit 1
-        else
-          echo "检测到新tag，准备更新文件"
-          echo "${{ env.CURRENT_TAG }}" > cache/tag.md
-          
-          # 更新文件到仓库
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add cache/tag.md
-          git commit -m "chore: 更新tag记录到${{ env.CURRENT_TAG }}"
-          git push
-        fi
+      # ========== 6. 更新 temp/tag.md 并推送 ==========
+      - name: 更新 temp/tag.md 并推送
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${{ steps.get_latest_tag.outputs.latest_tag }}" > temp/tag.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add temp/tag.md
+          git commit -m "chore: 更新 temp/tag.md -> ${{ steps.get_latest_tag.outputs.latest_tag }}"
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }} HEAD:main
 
-    # ========== 3. 配置运行时 ==========
-    - name: 安装最新Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: 'latest'
+      # ========== 7. 克隆 SPlayer master-fix分支 ==========
+      - name: 克隆仓库 (master-fix分支)
+        uses: actions/checkout@v4
+        with:
+          repository: IamFurina/SPlayer
+          ref: master-fix
+          path: ${{ env.PROJECT_DIR }}
 
-    - name: 安装最新pnpm
-      uses: pnpm/action-setup@v2
-      with:
-        version: latest
+      # ========== 8. 安装依赖与构建逻辑 ==========
+      - name: 安装最新 Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 'latest'
 
-    # ========== 4. 环境变量配置 ========== 
-    - name: 配置环境变量 (Python精确处理)
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        cp -p .env.example .env
-        python <<"EOF"
-        # 原Python脚本保持不变
-        EOF
+      - name: 安装最新 pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
 
-    # ========== 5. 安装依赖 ==========
-    - name: 安装项目依赖
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        # 原依赖安装脚本保持不变
+      - name: 配置环境变量
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          cp -p .env.example .env
+          python <<"EOF"
+          import re
+          from pathlib import Path
+          replacements = {
+              'RENDERER_VITE_SERVER_URL': {
+                  'value': 'https://musicapi.881128.xyz',
+                  'pattern': r'^(RENDERER_VITE_SERVER_URL\\s*=\\s*)(["\\\']?)(.*?)(["\\\']?)(\\s*#.*)?$'
+              },
+              'VITE_UNM_API': {
+                  'value': 'https://unm.881128.xyz',
+                  'pattern': r'^(VITE_UNM_API\\s*=\\s*)(["\\\']?)(.*?)(["\\\']?)(\\s*#.*)?$'
+              },
+              'RENDERER_VITE_SITE_URL': {
+                  'value': 'https://music.881128.xyz',
+                  'pattern': r'^(RENDERER_VITE_SITE_URL\\s*=\\s*)(["\\\']?)(.*?)(["\\\']?)(\\s*#.*)?$'
+              }
+          }
+          env_file = Path('.env')
+          content = env_file.read_text()
+          modified = 0
+          for key, cfg in replacements.items():
+              pattern = re.compile(cfg['pattern'], re.MULTILINE | re.IGNORECASE)
+              new_content, count = re.subn(pattern, lambda m: f"{m.group(1)}{cfg['value']}{m.group(5) or ''}", content)
+              if count>0:
+                  content = new_content
+                  modified +=1
+              else:
+                  content += f"\\n{key} = {cfg['value']}"
+                  modified +=1
+          if modified!=3: raise ValueError(f"应修改3个配置项，实际修改{modified}")
+          content = '\\n'.join(line.rstrip() for line in content.splitlines())
+          env_file.write_text(content + '\\n')
+          EOF
 
-    # ========== 6. 构建项目 ==========
-    - name: 执行构建
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        # 原构建脚本保持不变
+      - name: 安装项目依赖
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          rm -rf node_modules/ .pnpm-store/
+          pnpm install
 
-    # ========== 7. 生成Dockerfile ==========
-    - name: 创建精简Dockerfile
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        # 原Dockerfile生成脚本保持不变
+      - name: 构建项目
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: pnpm build
 
-    # ========== 8. 构建Docker镜像 ==========
-    - name: 打包Docker镜像
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        # 动态生成镜像名称
-        TAG_NAME="${{ steps.get-tag.outputs.LATEST_TAG }}"
-        docker build -t ${{ env.DOCKER_IMAGE_NAME }}:$TAG_NAME -f Dockerfile.auto .
-        
-        # 保存镜像文件（包含tag名）
-        mkdir -p release
-        docker save -o release/splayer-docker-$TAG_NAME.tar ${{ env.DOCKER_IMAGE_NAME }}:$TAG_NAME
+      # ========== 9. 生成 Dockerfile 并构建镜像 ==========
+      - name: 生成 Dockerfile
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          cat > Dockerfile.auto << 'DOCKERFILE'
+          FROM nginx:1.25-alpine-slim
+          COPY out/renderer /usr/share/nginx/html
+          EXPOSE 80
+          CMD ["nginx", "-g", "daemon off;"]
+          DOCKERFILE
 
-    # ========== 9. 创建发布包 ==========
-    - name: 打包构建产物
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        RELEASE_NAME="${{ steps.get-tag.outputs.LATEST_TAG }}"
-        mkdir -p release/${RELEASE_NAME}
-        cp -r out/renderer/* release/${RELEASE_NAME}
-        tar -czvf release/${RELEASE_NAME}.tar.gz -C release ${RELEASE_NAME}
+      - name: 构建 Docker 镜像
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE_NAME }}:${{ steps.get_latest_tag.outputs.latest_tag }} -f Dockerfile.auto .
+          mkdir -p release
+          docker save -o release/${{ steps.get_latest_tag.outputs.latest_tag }}-image.tar ${{ env.DOCKER_IMAGE_NAME }}:${{ steps.get_latest_tag.outputs.latest_tag }}
 
-    # ========== 10. 发布产物 ==========
-    - name: 上传到GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        name: "${{ steps.get-tag.outputs.LATEST_TAG }}"
-        tag_name: "${{ steps.get-tag.outputs.LATEST_TAG }}"
-        body: |
-          ## 构建信息
-          - 触发方式: ${{ github.event_name }}
-          - 构建时间: ${{ github.run_started_at }}
-          - 镜像Tag: ${{ steps.get-tag.outputs.LATEST_TAG }}
-          
-          ## 使用说明
-          ```bash
-          docker load -i splayer-docker-${{ steps.get-tag.outputs.LATEST_TAG }}.tar
-          docker run -p 80:80 ${{ env.DOCKER_IMAGE_NAME }}:${{ steps.get-tag.outputs.LATEST_TAG }}
-          ```
-        files: |
-          ${{ env.PROJECT_DIR }}/release/*.tar.gz
-          ${{ env.PROJECT_DIR }}/release/splayer-docker-*.tar
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ========== 10. 打包并发布 ==========
+      - name: 打包发布
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          tar -czvf release/${{ steps.get_latest_tag.outputs.latest_tag }}.tar.gz -C release .
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ steps.get_latest_tag.outputs.latest_tag }}
+          tag_name: ${{ steps.get_latest_tag.outputs.latest_tag }}
+          files: |
+            ${{ env.PROJECT_DIR }}/release/*.tar.gz
+            ${{ env.PROJECT_DIR }}/release/*-image.tar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
