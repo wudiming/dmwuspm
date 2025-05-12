@@ -1,0 +1,42 @@
+name: 获取 SPlayer 最新 Tag 并写入文件
+
+# ========== 触发条件 ==========
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ========== 1. Checkout 当前仓库 ==========
+      - name: Checkout 仓库
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      # ========== 2. 初始化 temp 目录 ==========
+      - name: 创建 temp 目录
+        run: mkdir -p temp
+
+      # ========== 3. 获取外部仓库最新 Tag ==========
+      - name: 获取 IamFurina/SPlayer 最新 Tag
+        id: get_latest_tag
+        run: |
+          LATEST_TAG=$(git ls-remote --tags https://github.com/IamFurina/SPlayer.git \
+            | awk '{print $2}' \
+            | sed 's@refs/tags/@@' \
+            | sort -V \
+            | tail -n1)
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      # ========== 4. 写入 temp/tag.md ==========
+      - name: 写入最新 Tag 到 temp/tag.md
+        run: |
+          echo "最新 Tag：${{ steps.get_latest_tag.outputs.latest_tag }}" > temp/tag.md
+
+      # ========== 5. 输出结果 ==========
+      - name: 展示生成的文件
+        run: |
+          echo "文件内容："
+          cat temp/tag.md
