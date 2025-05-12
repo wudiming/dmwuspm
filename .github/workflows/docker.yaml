@@ -51,14 +51,17 @@ jobs:
 
       # ========== 5. 比对新旧版本 ==========
       - name: 比对新旧版本
+        id: compare
         run: |
           if [ "${{ steps.read_old_tag.outputs.old_tag }}" = "${{ steps.get_latest_tag.outputs.latest_tag }}" ]; then
-            echo "版本未更新 (${{ steps.get_latest_tag.outputs.latest_tag }})，脚本结束。"
-            exit 0
+            echo "same=true" >> $GITHUB_OUTPUT
+          else
+            echo "same=false" >> $GITHUB_OUTPUT
           fi
 
       # ========== 6. 更新 temp/tag.md 并推送 ==========
       - name: 更新 temp/tag.md 并推送
+        if: steps.compare.outputs.same == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -71,6 +74,7 @@ jobs:
 
       # ========== 7. 克隆 SPlayer master-fix分支 ==========
       - name: 克隆仓库 (master-fix分支)
+        if: steps.compare.outputs.same == 'false'
         uses: actions/checkout@v4
         with:
           repository: IamFurina/SPlayer
@@ -79,16 +83,19 @@ jobs:
 
       # ========== 8. 安装依赖与构建逻辑 ==========
       - name: 安装最新 Node.js
+        if: steps.compare.outputs.same == 'false'
         uses: actions/setup-node@v3
         with:
           node-version: 'latest'
 
       - name: 安装最新 pnpm
+        if: steps.compare.outputs.same == 'false'
         uses: pnpm/action-setup@v2
         with:
           version: latest
 
       - name: 配置环境变量
+        if: steps.compare.outputs.same == 'false'
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           cp -p .env.example .env
@@ -127,17 +134,20 @@ jobs:
           EOF
 
       - name: 安装项目依赖
+        if: steps.compare.outputs.same == 'false'
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           rm -rf node_modules/ .pnpm-store/
           pnpm install
 
       - name: 构建项目
+        if: steps.compare.outputs.same == 'false'
         working-directory: ${{ env.PROJECT_DIR }}
         run: pnpm build
 
       # ========== 9. 生成 Dockerfile 并构建镜像 ==========
       - name: 生成 Dockerfile
+        if: steps.compare.outputs.same == 'false'
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           cat > Dockerfile.auto << 'DOCKERFILE'
@@ -148,6 +158,7 @@ jobs:
           DOCKERFILE
 
       - name: 构建 Docker 镜像
+        if: steps.compare.outputs.same == 'false'
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           docker build -t ${{ env.DOCKER_IMAGE_NAME }}:${{ steps.get_latest_tag.outputs.latest_tag }} -f Dockerfile.auto .
@@ -156,11 +167,13 @@ jobs:
 
       # ========== 10. 打包并发布 ==========
       - name: 打包发布
+        if: steps.compare.outputs.same == 'false'
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           tar -czvf release/${{ steps.get_latest_tag.outputs.latest_tag }}.tar.gz -C release .
 
       - name: 发布到 GitHub Release
+        if: steps.compare.outputs.same == 'false'
         uses: softprops/action-gh-release@v1
         with:
           name: ${{ steps.get_latest_tag.outputs.latest_tag }}
