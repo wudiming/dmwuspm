@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# 使用命令：curl -sSL https://raw.githubusercontent.com/wudiming/dmwuspm/main/mhline.sh | bash
+
 # 自动获取当前系统用户名
 USERNAME=$(whoami)
 
@@ -92,13 +94,3 @@ execute_command \
 # 脚本完成
 echo "===== 所有操作成功完成 ====="
 echo "结束时间: $(date)"
-
-# 删除脚本自身
-SCRIPT_PATH="$0"
-echo "正在删除脚本自身: $SCRIPT_PATH"
-if [ -f "$SCRIPT_PATH" ]; then
-    rm -f "$SCRIPT_PATH"
-    echo "脚本已成功删除"
-else
-    echo "警告: 未找到脚本文件，无法删除" >&2
-fi
