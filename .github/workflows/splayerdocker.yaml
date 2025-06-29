@@ -3,7 +3,7 @@ name: SPlayer Runtime-Build Docker Image
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0'  # 每周一北京时间上午 8 点
+    - cron: '0 0 * * 0'  # 每周一上午 8 点（北京时间）
 
 jobs:
   build-and-push:
@@ -17,30 +17,37 @@ jobs:
       - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
+      - name: 获取远程版本号（支持 fallback）
+        id: get_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "尝试从 releases/latest 获取 tag..."
+          tag=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
+
+          if [ "$tag" = "null" ] || [ -z "$tag" ]; then
+            echo "fallback 到 tags..."
+            tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/tags | jq -r '.[0].name')
+          fi
+
+          echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
+          echo "latest_tag=$tag" >> $GITHUB_OUTPUT
+
       - name: 读取本地版本号
         id: read_old_tag
         run: |
           mkdir -p temp
           if [ -f "${{ env.LOCAL_TAG_FILE }}" ]; then
-            old_tag=$(cat "${{ env.LOCAL_TAG_FILE }}" | tr -d '\n')
+            tag=$(cat "${{ env.LOCAL_TAG_FILE }}" | tr -d '\n')
           else
-            old_tag=""
+            tag=""
           fi
-          echo "old_tag=$old_tag"
-          echo "old_tag=$old_tag" >> $GITHUB_OUTPUT
-
-      - name: 获取远程版本号
-        id: get_latest_tag
-        run: |
-          latest_tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
-          echo "latest_tag=$latest_tag"
-          echo "RELEASE_TAG=$latest_tag" >> $GITHUB_ENV
-          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+          echo "old_tag=$tag" >> $GITHUB_OUTPUT
 
       - name: 比对新旧版本
         id: compare
         run: |
-          if [ "${{ steps.read_old_tag.outputs.old_tag }}" = "${{ steps.get_latest_tag.outputs.latest_tag }}" ]; then
+          if [ "${{ steps.read_old_tag.outputs.old_tag }}" = "${{ steps.get_release.outputs.latest_tag }}" ]; then
             echo "same=true" >> $GITHUB_OUTPUT
           else
             echo "same=false" >> $GITHUB_OUTPUT
@@ -48,7 +55,7 @@ jobs:
 
       - name: 跳过构建（版本一致）
         if: steps.compare.outputs.same == 'true'
-        run: echo "版本一致，无需构建，任务终止。"
+        run: echo "版本一致，跳过构建流程。"
 
       - name: 克隆 SPlayer 源码
         if: steps.compare.outputs.same == 'false'
@@ -150,7 +157,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: 构建并推送 Docker 镜像
+      - name: 构建并推送镜像
         if: steps.compare.outputs.same == 'false'
         uses: docker/build-push-action@v5
         with:
@@ -161,7 +168,7 @@ jobs:
             wudiming/prosp:latest
             wudiming/prosp:${{ env.RELEASE_TAG }}
 
-      - name: 更新本地版本号文件
+      - name: 更新 tag 文件并提交
         if: steps.compare.outputs.same == 'false'
         run: |
           echo "${{ env.RELEASE_TAG }}" > ${{ env.LOCAL_TAG_FILE }}
