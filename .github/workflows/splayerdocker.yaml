@@ -1,0 +1,106 @@
+name: SPlayer Runtime-Build Docker Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 获取上游 SPlayer 最新 Release 版本号
+        id: get_release
+        run: |
+          tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
+          echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
+
+      - name: Checkout（本地元数据使用）
+        uses: actions/checkout@v4
+
+      - name: 克隆 SPlayer 源码
+        run: git clone https://github.com/IamFurina/SPlayer.git
+
+      - name: 添加 Dockerfile 和 entrypoint 脚本
+        working-directory: ./SPlayer
+        run: |
+          cat <<'EOF' > Dockerfile
+          FROM node:18-alpine
+
+          # 安装依赖
+          RUN apk add --no-cache bash nginx && \
+              npm install -g pnpm && \
+              mkdir -p /app /usr/share/nginx/html
+
+          WORKDIR /app
+
+          COPY . .
+
+          COPY entrypoint.sh /entrypoint.sh
+          RUN chmod +x /entrypoint.sh
+
+          EXPOSE 80
+          ENTRYPOINT ["/entrypoint.sh"]
+          EOF
+
+          cat <<'EOF' > entrypoint.sh
+          #!/bin/sh
+          set -e
+
+          echo "[ENTRYPOINT] 构建前端中..."
+
+          if [ ! -f .env ]; then
+            echo "[ENTRYPOINT] .env 不存在，复制 .env.example"
+            cp .env.example .env
+          fi
+
+          echo "[ENTRYPOINT] 当前环境配置："
+          head -n 5 .env || echo "[无 .env 文件]"
+
+          pnpm install
+          pnpm build
+
+          if [ ! -d "out/renderer" ]; then
+            echo "[ERROR] 构建失败，目录 out/renderer 不存在"
+            exit 1
+          fi
+
+          echo "[ENTRYPOINT] 准备 nginx 资源目录..."
+          rm -rf /usr/share/nginx/html/*
+          cp -r out/renderer/* /usr/share/nginx/html/
+
+          echo "[ENTRYPOINT] 写入 nginx 配置..."
+          cat <<NGINX > /etc/nginx/http.d/default.conf
+          server {
+              listen 80;
+              server_name localhost;
+
+              location / {
+                  root /usr/share/nginx/html;
+                  index index.html;
+                  try_files \$uri \$uri/ /index.html;
+              }
+          }
+          NGINX
+
+          echo "[ENTRYPOINT] 启动 nginx..."
+          exec nginx -g "daemon off;"
+          EOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建并推送 Runtime 构建镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: ./SPlayer
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            wudiming/prosp:latest
+            wudiming/prosp:${{ env.RELEASE_TAG }}
