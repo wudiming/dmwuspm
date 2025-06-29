@@ -2,6 +2,8 @@ name: SPlayer Runtime-Build Docker Image
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'  # 每周一北京时间上午 8 点
 
 jobs:
   build-and-push:
@@ -9,21 +11,51 @@ jobs:
 
     env:
       PROJECT_DIR: SPlayer
+      LOCAL_TAG_FILE: temp/tag.md
 
     steps:
-      - name: 获取上游 SPlayer 最新 Release 版本号
-        id: get_release
-        run: |
-          tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
-          echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
-
-      - name: Checkout（用于上传构建产物）
+      - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
+      - name: 读取本地版本号
+        id: read_old_tag
+        run: |
+          mkdir -p temp
+          if [ -f "${{ env.LOCAL_TAG_FILE }}" ]; then
+            old_tag=$(cat "${{ env.LOCAL_TAG_FILE }}" | tr -d '\n')
+          else
+            old_tag=""
+          fi
+          echo "old_tag=$old_tag"
+          echo "old_tag=$old_tag" >> $GITHUB_OUTPUT
+
+      - name: 获取远程版本号
+        id: get_latest_tag
+        run: |
+          latest_tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
+          echo "latest_tag=$latest_tag"
+          echo "RELEASE_TAG=$latest_tag" >> $GITHUB_ENV
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+
+      - name: 比对新旧版本
+        id: compare
+        run: |
+          if [ "${{ steps.read_old_tag.outputs.old_tag }}" = "${{ steps.get_latest_tag.outputs.latest_tag }}" ]; then
+            echo "same=true" >> $GITHUB_OUTPUT
+          else
+            echo "same=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 跳过构建（版本一致）
+        if: steps.compare.outputs.same == 'true'
+        run: echo "版本一致，无需构建，任务终止。"
+
       - name: 克隆 SPlayer 源码
+        if: steps.compare.outputs.same == 'false'
         run: git clone https://github.com/IamFurina/SPlayer.git
 
       - name: 配置环境变量（修改 .env）
+        if: steps.compare.outputs.same == 'false'
         working-directory: ./SPlayer
         run: |
           cp -p .env.example .env
@@ -63,6 +95,7 @@ jobs:
           EOF
 
       - name: 安装依赖并构建 SPlayer
+        if: steps.compare.outputs.same == 'false'
         working-directory: ./SPlayer
         run: |
           corepack enable
@@ -70,7 +103,8 @@ jobs:
           pnpm install
           pnpm build
 
-      - name: 添加自定义 nginx 配置文件
+      - name: 添加 nginx 配置文件
+        if: steps.compare.outputs.same == 'false'
         working-directory: ./SPlayer
         run: |
           cat <<'EOF' > nginx.conf
@@ -84,7 +118,6 @@ jobs:
                   try_files \$uri \$uri/ /index.html;
               }
 
-              # CORS 设置（可选）
               add_header Access-Control-Allow-Origin *;
               add_header Access-Control-Allow-Methods 'GET, POST, OPTIONS';
               add_header Access-Control-Allow-Headers 'DNT,X-Mx-ReqToken,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type';
@@ -92,6 +125,7 @@ jobs:
           EOF
 
       - name: 添加 Dockerfile
+        if: steps.compare.outputs.same == 'false'
         working-directory: ./SPlayer
         run: |
           cat <<'EOF' > Dockerfile
@@ -106,15 +140,18 @@ jobs:
           EOF
 
       - name: 设置 Docker Buildx
+        if: steps.compare.outputs.same == 'false'
         uses: docker/setup-buildx-action@v3
 
       - name: 登录 Docker Hub
+        if: steps.compare.outputs.same == 'false'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: 构建并推送 Runtime 镜像（已构建前端）
+      - name: 构建并推送 Docker 镜像
+        if: steps.compare.outputs.same == 'false'
         uses: docker/build-push-action@v5
         with:
           context: ./SPlayer
@@ -123,3 +160,13 @@ jobs:
           tags: |
             wudiming/prosp:latest
             wudiming/prosp:${{ env.RELEASE_TAG }}
+
+      - name: 更新本地版本号文件
+        if: steps.compare.outputs.same == 'false'
+        run: |
+          echo "${{ env.RELEASE_TAG }}" > ${{ env.LOCAL_TAG_FILE }}
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add ${{ env.LOCAL_TAG_FILE }}
+          git commit -m "chore: 更新 tag.md 为 ${{ env.RELEASE_TAG }}"
+          git push
