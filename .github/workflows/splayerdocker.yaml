@@ -70,6 +70,27 @@ jobs:
           pnpm install
           pnpm build
 
+      - name: 添加自定义 nginx 配置文件
+        working-directory: ./SPlayer
+        run: |
+          cat <<'EOF' > nginx.conf
+          server {
+              listen 80;
+              server_name localhost;
+
+              location / {
+                  root /usr/share/nginx/html;
+                  index index.html;
+                  try_files \$uri \$uri/ /index.html;
+              }
+
+              # CORS 设置（可选）
+              add_header Access-Control-Allow-Origin *;
+              add_header Access-Control-Allow-Methods 'GET, POST, OPTIONS';
+              add_header Access-Control-Allow-Headers 'DNT,X-Mx-ReqToken,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type';
+          }
+          EOF
+
       - name: 添加 Dockerfile
         working-directory: ./SPlayer
         run: |
@@ -77,6 +98,7 @@ jobs:
           FROM nginx:1.25-alpine
 
           COPY ./out/renderer /usr/share/nginx/html
+          COPY ./nginx.conf /etc/nginx/conf.d/default.conf
 
           EXPOSE 80
 
