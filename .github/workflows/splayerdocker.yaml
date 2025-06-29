@@ -7,6 +7,9 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
+    env:
+      PROJECT_DIR: SPlayer
+
     steps:
       - name: 获取上游 SPlayer 最新 Release 版本号
         id: get_release
@@ -14,79 +17,73 @@ jobs:
           tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
           echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
 
-      - name: Checkout（本地元数据使用）
+      - name: Checkout（用于上传构建产物）
         uses: actions/checkout@v4
 
       - name: 克隆 SPlayer 源码
         run: git clone https://github.com/IamFurina/SPlayer.git
 
-      - name: 添加 Dockerfile 和 entrypoint 脚本
+      - name: 配置环境变量（修改 .env）
         working-directory: ./SPlayer
         run: |
-          cat <<'EOF' > Dockerfile
-          FROM node:18-alpine
-
-          # 安装依赖
-          RUN apk add --no-cache bash nginx && \
-              npm install -g pnpm && \
-              mkdir -p /app /usr/share/nginx/html
-
-          WORKDIR /app
-
-          COPY . .
-
-          COPY entrypoint.sh /entrypoint.sh
-          RUN chmod +x /entrypoint.sh
-
-          EXPOSE 80
-          ENTRYPOINT ["/entrypoint.sh"]
+          cp -p .env.example .env
+          python3 <<"EOF"
+          import re
+          from pathlib import Path
+          replacements = {
+              'RENDERER_VITE_SERVER_URL': {
+                  'value': 'https://musicapi.881128.xyz',
+                  'pattern': r'^(RENDERER_VITE_SERVER_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
+              },
+              'VITE_UNM_API': {
+                  'value': 'https://unm.881128.xyz',
+                  'pattern': r'^(VITE_UNM_API\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
+              },
+              'RENDERER_VITE_SITE_URL': {
+                  'value': 'https://music.881128.xyz',
+                  'pattern': r'^(RENDERER_VITE_SITE_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
+              }
+          }
+          env_file = Path('.env')
+          content = env_file.read_text()
+          modified = 0
+          for key, cfg in replacements.items():
+              pattern = re.compile(cfg['pattern'], re.MULTILINE | re.IGNORECASE)
+              new_content, count = re.subn(pattern, lambda m: f"{m.group(1)}{cfg['value']}{m.group(5) or ''}", content)
+              if count > 0:
+                  content = new_content
+                  modified += 1
+              else:
+                  content += f"\n{key}={cfg['value']}"
+                  modified += 1
+          if modified != 3:
+              raise ValueError(f"应修改3个配置项，实际修改{modified}")
+          content = '\n'.join(line.rstrip() for line in content.splitlines())
+          env_file.write_text(content + '\n')
           EOF
 
-          cat <<'EOF' > entrypoint.sh
-          #!/bin/sh
-          set -e
-
-          echo "[ENTRYPOINT] 构建前端中..."
-
-          if [ ! -f .env ]; then
-            echo "[ENTRYPOINT] .env 不存在，复制 .env.example"
-            cp .env.example .env
-          fi
-
-          echo "[ENTRYPOINT] 当前环境配置："
-          head -n 5 .env || echo "[无 .env 文件]"
-
+      - name: 安装依赖并构建 SPlayer
+        working-directory: ./SPlayer
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
           pnpm install
           pnpm build
 
-          if [ ! -d "out/renderer" ]; then
-            echo "[ERROR] 构建失败，目录 out/renderer 不存在"
-            exit 1
-          fi
+      - name: 添加 Dockerfile
+        working-directory: ./SPlayer
+        run: |
+          cat <<'EOF' > Dockerfile
+          FROM nginx:1.25-alpine
 
-          echo "[ENTRYPOINT] 准备 nginx 资源目录..."
-          rm -rf /usr/share/nginx/html/*
-          cp -r out/renderer/* /usr/share/nginx/html/
+          COPY ./out/renderer /usr/share/nginx/html
 
-          echo "[ENTRYPOINT] 写入 nginx 配置..."
-          cat <<NGINX > /etc/nginx/http.d/default.conf
-          server {
-              listen 80;
-              server_name localhost;
+          EXPOSE 80
 
-              location / {
-                  root /usr/share/nginx/html;
-                  index index.html;
-                  try_files \$uri \$uri/ /index.html;
-              }
-          }
-          NGINX
-
-          echo "[ENTRYPOINT] 启动 nginx..."
-          exec nginx -g "daemon off;"
+          CMD ["nginx", "-g", "daemon off;"]
           EOF
 
-      - name: Set up Docker Buildx
+      - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: 登录 Docker Hub
@@ -95,7 +92,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: 构建并推送 Runtime 构建镜像
+      - name: 构建并推送 Runtime 镜像（已构建前端）
         uses: docker/build-push-action@v5
         with:
           context: ./SPlayer
