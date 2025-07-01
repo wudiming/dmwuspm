@@ -1,4 +1,4 @@
-name: SPlayer Runtime-Build Docker Image
+name: 构建SPlayer-Pro Docker镜像
 
 on:
   workflow_dispatch:
