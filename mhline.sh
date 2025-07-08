@@ -68,7 +68,7 @@ echo ""
 
 # 1. 创建CloudLinux应用环境
 execute_command \
-    "cloudlinux-selector create --json --interpreter=nodejs --user=$USERNAME --app-root=$APP_ROOT --app-uri=/ --version=22.14.0 --app-mode=Development --startup-file=index.js" \
+    "cloudlinux-selector create --json --interpreter=nodejs --user=$USERNAME --app-root=$APP_ROOT --app-uri=/ --version=22.14.0 --app-mode=Development --startup-file=app.js" \
     "创建CloudLinux Node.js环境"
 
 # 2. 进入应用目录
