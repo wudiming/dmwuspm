@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 使用命令：curl -sSL https://raw.githubusercontent.com/wudiming/dmwuspm/main/mhline.sh | bash
-# 删除js命令：cloudlinux-selector destroy --interpreter=nodejs --user=$USERNAME --app-root=/home/$USERNAME/domains/$WEBHOST/public_html
+# 删除js命令：cloudlinux-selector destroy --json --interpreter=nodejs --user=$USERNAME --app-root=/home/$USERNAME/domains/$WEBHOST/public_html
 
 
 # 自动获取当前系统用户名
