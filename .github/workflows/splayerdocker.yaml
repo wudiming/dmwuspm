@@ -74,10 +74,6 @@ jobs:
                   'value': 'https://musicapi.881128.xyz',
                   'pattern': r'^(RENDERER_VITE_SERVER_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
               },
-              'VITE_UNM_API': {
-                  'value': 'https://unm.881128.xyz',
-                  'pattern': r'^(VITE_UNM_API\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
-              },
               'RENDERER_VITE_SITE_URL': {
                   'value': 'https://music.881128.xyz',
                   'pattern': r'^(RENDERER_VITE_SITE_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
