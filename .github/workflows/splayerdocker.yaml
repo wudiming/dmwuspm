@@ -27,7 +27,7 @@ jobs:
 
           if [ "$tag" = "null" ] || [ -z "$tag" ]; then
             echo "fallback 到 tags..."
-            tag=$(curl -s https://api.github.com/repos/IamFurina/SPlayer/tags | jq -r '.[0].name')
+            tag=$(curl -s https://api.github.com/repos/MoeFurina/SPlayer/tags | jq -r '.[0].name')
           fi
 
           echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
@@ -59,7 +59,7 @@ jobs:
 
       - name: 克隆 SPlayer 源码
         if: steps.compare.outputs.same == 'false'
-        run: git clone https://github.com/IamFurina/SPlayer.git
+        run: git clone https://github.com/MoeFurina/SPlayer.git
 
       - name: 配置环境变量（修改 .env）
         if: steps.compare.outputs.same == 'false'
