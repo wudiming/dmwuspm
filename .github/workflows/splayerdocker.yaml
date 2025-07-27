@@ -23,7 +23,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "尝试从 releases/latest 获取 tag..."
-          tag=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/IamFurina/SPlayer/releases/latest | jq -r .tag_name)
+          tag=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/MoeFurina/SPlayer/releases/latest | jq -r .tag_name)
 
           if [ "$tag" = "null" ] || [ -z "$tag" ]; then
             echo "fallback 到 tags..."
