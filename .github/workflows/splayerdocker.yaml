@@ -71,7 +71,7 @@ jobs:
           from pathlib import Path
           replacements = {
               'RENDERER_VITE_SERVER_URL': {
-                  'value': 'https://musicapi.881128.xyz/api',
+                  'value': 'https://musicapi.881128.xyz',
                   'pattern': r'^(RENDERER_VITE_SERVER_URL\s*=\s*)(["\']?)(.*?)(["\']?)(\s*#.*)?$'
               },
               'RENDERER_VITE_SITE_URL': {
